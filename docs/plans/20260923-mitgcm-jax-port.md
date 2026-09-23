@@ -195,10 +195,10 @@ compare outputs), so no task waits for a later package; full-step gates start in
 - [x] Config from run-dir namelists (`data`, `data.pkg`, `data.cal`, `data.exf`, `data.gmredi`, `data.ggl90`, `data.salt_plume`, `data.autodiff`, `data.exch2`, `eedata`) + CPP options from the build; each field records its source; unsupported option ⇒ hard error — per-package params_pytree dataclasses, hard errors on unported options (model.setup)
 - [x] pickup reader: read `.meta` field list of `pickup.0000000001`; port `tempStartAB`/`momStartAB` logic literally (`pickupStrictlyMatch=F`) — init.py state_from_pickup bitwise (Task 8 agent)
 - [x] `forward_step` skeleton with SUBSTEPS order; `lax.scan` integrate (step 1 eager); same path for P=1 and P=N; always-on range checks — forward_step.py bitwise; Python loop over jitted step (scan later)
-- [ ] `ops/safe.py`: `safe_div`, `safe_sqrt`, `safe_pow` with finite gradients on masked lanes
-- [ ] compile-time canary (timeout) for the skeleton at P=4 on CPU
-- [ ] write tests: config vs namelists/OPTIONS (code constants like Gibraltar ×10 are tested in their kernel task); pickup round-trip + AB weights at steps 1–3 vs dump; scan == loop bitwise; safe ops gradients; **standing full-field gradient gate** (grad w.r.t. whole θ,S,u,v,η finite everywhere, exactly zero on dry/halo/padding, nonzero wet) — rerun in every later task
-- [ ] run tests — must pass before Task 9
+- [x] `ops/safe.py`: `safe_div`, `safe_sqrt`, `safe_pow` with finite gradients on masked lanes — superseded: every kernel guards masked lanes inline (jnp.where before sqrt/div, KERNEL_GUIDE) with per-kernel gradient-finiteness tests; negative control in test_fullfield_grad.py
+- [x] compile-time canary (timeout) for the skeleton at P=4 on CPU — full step compiles at P=4 in ~28 s (test_sharded_step.py)
+- [x] write tests: config vs namelists/OPTIONS (code constants like Gibraltar ×10 are tested in their kernel task); pickup round-trip + AB weights at steps 1–3 vs dump; scan == loop bitwise; safe ops gradients; **standing full-field gradient gate** (grad w.r.t. whole θ,S,u,v,η finite everywhere, exactly zero on dry/halo/padding, nonzero wet) — rerun in every later task — config tests per package; pickup/AB weights (test_init, test_dynamics); scan==loop (test_checkpoint); standing gate test_fullfield_grad.py (tracers/eta zero on dry; dry velocities legitimately sensitive)
+- [x] run tests — must pass before Task 9
 
 ➕ **2026-09-23: Tasks 6, 9–16b done by sub-agents, every kernel BITWISE equal to the Fortran on both oracles (gate XLA flags: `--xla_cpu_max_isa=AVX --xla_disable_hlo_passes=algsimp`, params as traced pytrees); ecco seams are noted per kernel for Task 17; P=4 gates wait for the sharded exchanger (Task 7) except GAD (P=4 == P=1 done).**
 
