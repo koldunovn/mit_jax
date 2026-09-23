@@ -134,3 +134,16 @@ Production runs may use XLA defaults (ulp-level differences only).
 - c66g AB3 start-up quirk: mom_StartAB = nIter0 is compared with the counts 0/1 (adams_bashforth3.F:87-92): step 1
   after the V4r4 pickup uses AB2 weights, AB3 afterwards; both gated, forcing AB3 at step 1 fails.
 - GGL90_CALC_VISC masks the V increment but not the U increment (ggl90_calc_visc.F:49 vs 56) — literal c66g.
+
+## Tasks 10–11 — EOS, density gradients, IVDC, mixed layer, salt plume (2026-09-23, sub-agent)
+- Bitwise on both oracles. FMA (default XLA) gave 1.6e-14 in rhoInSitu and 2.4–3.8e-13 in sigmaX/Y (differencing
+  amplifies ulps): compare against a numpy transcription before doubting a literal port.
+- A corner halo fill can be invisible in the output (masks 0 at corner halos): negative control first, then gate the
+  corner code against a transcription test.
+- The do_oceanic_phys k-loop has no recurrence (vectorised); SALT_PLUME_CALC_DEPTH is one (vectorised FIND_RHO,
+  `lax.scan` for the carry). saltPlumeFlux = spflx (READIN_SALT_PLUME_FLUX): not zeroed in DO_OCEANIC_PHYS, only
+  saltPlumeDepth is. calcMixLayerDepth=F in V4r4: hMixLayer stays 0.
+- ecco-mode seam (Task 17): ZERO_ADJ_LOC ≙ `lax.stop_gradient` on sigmaX/Y/R, rhoInSitu keeps its gradient.
+- Jitting the function returned by `jax.vjp` captures residuals as constants (3 GB): jit a function that calls vjp.
+- Right after an edit on the login node, compute nodes may still see stale files (home FS cache): checksum inside srun
+  before trusting a surprising failure.
