@@ -93,6 +93,9 @@ PROGNOSTIC = mw.PROGNOSTIC
 MODES = ("ecco", "exact_nodyn", "exact_full", "exact_iceecco")
 H_DEFAULT = {"theta": (1e-1, 1e-2, 1e-3, 1e-4), "kapGM": (1e-1, 1e-2, 1e-3, 1e-4), "heff": (1e-1, 1e-2, 1e-3, 1e-4),
              "atemp": (1e-1, 1e-2, 1e-3, 1e-4), "aqh": (1e-3, 1e-4, 1e-5, 1e-6), "tauu": (1e-2, 1e-3, 1e-4, 1e-5)}
+# per-direction h (sea-ice directions: switch flips in SEAICE_GROWTH / the LSOR counts dominate the FD error at larger h;
+# the forward is deterministic, so small h costs only round-off: |J| eps / (h |dJ|) ~ 1e-6 at h = 1e-6 for atemp_arctic)
+H_DIR = {"atemp_arctic": (1e-3, 1e-4, 1e-5, 1e-6), "heff_arctic": (1e-2, 1e-3, 1e-4, 1e-5)}
 
 
 def git_head():
@@ -582,7 +585,7 @@ def action_fd(E, mode, out, log):
     for n in names:
         d = {k: jnp.asarray(E.dirs[n][k]) for k in th}
         kind = next(k for k in H_DEFAULT if n.startswith(k))
-        hs = [float(h) for h in a.hs.split(",")] if a.hs else H_DEFAULT[kind]
+        hs = [float(h) for h in a.hs.split(",")] if a.hs else H_DIR.get(n, H_DEFAULT[kind])
         for h in hs:
             t = time.time()
             jp = float(Jf(jax.tree.map(lambda x, y: x + h * y, th, d), E.fm0, E.st0, xs_d))
