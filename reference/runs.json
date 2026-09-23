@@ -2,6 +2,6 @@
   "_doc": "Named Fortran reference runs used by tests (scripts/tests/test_reference.py). Paths under /work/ab0995/a270088/MIT/reference/runs/. Add a run here only after it ended normally; never repoint a name to a different run.",
   "smoke_ff_serial13": "smoke_noforcing_ff_serial13",
   "smoke_ff_mpi96": "smoke_noforcing_ff_mpi96",
-  "smoke_ff_serial13_jaxdump_off": "smoke_noforcing_ff_s13_jd_off2",
-  "smoke_ff_serial13_jaxdump_on": "smoke_noforcing_ff_s13_jd_on2"
+  "smoke_ff_serial13_jaxdump_off": "smoke_noforcing_ff_s13_jd_off3",
+  "smoke_ff_serial13_jaxdump_on": "smoke_noforcing_ff_s13_jd_on3"
 }

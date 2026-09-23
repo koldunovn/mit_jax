@@ -431,3 +431,22 @@ C     Dump a routine-local array of ONE tile (e.g. sigmaX(i,j,k) inside a bi,bj 
      &                    bi, bj, myIter, myThid )
       RETURN
       END
+
+C---------------------------------------------------------------------------------------------------------------------
+C     Dump a routine-local array shaped like a global field (all tiles), e.g. cg2d_b in SOLVE_FOR_PRESSURE.
+      SUBROUTINE JAXDUMP_LOCAL( stage, fname, kind, arr, nz,
+     &                          myIter, myThid )
+      IMPLICIT NONE
+#include "SIZE.h"
+#include "JAXDUMP.h"
+      CHARACTER*(*) stage, fname, kind
+      INTEGER nz, myIter, myThid
+      _RL arr(1-OLx:sNx+OLx,1-OLy:sNy+OLy,nz,nSx,nSy)
+      LOGICAL JAXDUMP_ACTIVE
+      EXTERNAL JAXDUMP_ACTIVE
+      IF ( .NOT. JAXDUMP_ACTIVE( myIter, myThid ) ) RETURN
+      jd_seq = jd_seq + 1
+      CALL JAXDUMP_FLD( stage, fname, kind, arr, nz, 0, 0,
+     &                  myIter, myThid )
+      RETURN
+      END

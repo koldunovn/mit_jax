@@ -50,8 +50,8 @@ geothermalFile=' '` (no forcing staged yet): machinery checks, not references.
 |---|---|---|---|
 | `smoke_noforcing_ff_serial13` | `ff_serial13_8668b6b46487` | 2 | ends normally; grid, pickup, 13-tile exch2 OK |
 | `smoke_noforcing_ff_mpi96` | `ff_mpi96_6e7d5bac461a` | 2 | ends normally; vs serial13: max rel. diff of %MON 8e-10 after 2 steps (cg2d residual 6e-10) — tile-order sums |
-| `smoke_noforcing_ff_s13_jd_off2` | `ff_serial13_jaxdump_f6b94ea956f9`, dumps off | 2 | T,S,Eta,U,V,W,PH and every %MON line byte-identical to the plain build |
-| `smoke_noforcing_ff_s13_jd_on2` | same, `JAXDUMP_STEPS=1:2` | 2 | byte-identical output too; 20 stages x 2 iterations, 14 GB; dumped theta = model output (float32 rounding); end of step 1 == start of step 2 bitwise (theta, salt, u, v, etaN); tile halos = neighbour interior |
+| `smoke_noforcing_ff_s13_jd_off2`, `_off3` | `ff_serial13_jaxdump_f6b94ea956f9`, `_390b5db49021` (27 stages), dumps off | 2 | T,S,Eta,U,V,W,PH and every %MON line byte-identical to the plain build |
+| `smoke_noforcing_ff_s13_jd_on2`, `_on3` | same, `JAXDUMP_STEPS=1:2` | 2 | byte-identical output too; 20 (on2) / 27 (on3) stages x 2 iterations, 14 / 19 GB; dumped theta = model output (float32 rounding); end of step 1 == start of step 2 bitwise (theta, salt, u, v, etaN); tile halos = neighbour interior |
 
 `%MON` SST/SSS statistics are printed only with one tile per process (`pkg/monitor/monitor.F:125-128`), so serial13
 runs lack them — expected, not a difference.

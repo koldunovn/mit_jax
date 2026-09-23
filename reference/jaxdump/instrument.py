@@ -20,12 +20,15 @@ REPO = Path(__file__).resolve().parents[2]
 C66G = REPO / "MITgcm_c66g"
 V4 = REPO / "ECCO-v4-Configurations" / "ECCOv4 Release 4"
 TREES = {"full": V4 / "code", "ff": V4 / "flux-forced" / "code"}
-C66G_PATH = {"forward_step.F": "model/src/forward_step.F", "do_oceanic_phys.F": "model/src/do_oceanic_phys.F"}
+C66G_PATH = {f: f"model/src/{f}" for f in ("forward_step.F", "do_oceanic_phys.F", "dynamics.F", "thermodynamics.F",
+                                           "solve_for_pressure.F")}
 
 # (file, anchor, occurrence, expected total, stage, dump statements, scope, what the substep does)
 # dump statements: 'S:<groups>' -> JAXDUMP_STATE(stage, groups, bi0, bj0);  'T:<name>:<kind>:<nz>' -> JAXDUMP_TILE of a
-# routine-local array. scope 'all' dumps every tile (bi0=0), 'tile' only the current bi,bj (inside a tile loop).
-FS, OP = "forward_step.F", "do_oceanic_phys.F"
+# routine-local array of the current tile; 'G:<name>:<kind>:<nz>' -> JAXDUMP_LOCAL of a routine-local all-tile array.
+# scope 'all' dumps every tile (bi0=0), 'tile' only the current bi,bj (inside a tile loop).
+# An anchor starting with 'BEFORE:' inserts before the statement (to catch a routine's inputs), else after it.
+FS, OP, DY, TH, SP = "forward_step.F", "do_oceanic_phys.F", "dynamics.F", "thermodynamics.F", "solve_for_pressure.F"
 STAGES = [
     (FS, r"CALL AUTODIFF_INADMODE_UNSET\(", 1, 1, "S00_begin", ["S:dtarfmkgpxc"], "all", "state at the start of the step"),
     (FS, r"CALL UPDATE_R_STAR\(\s*\.FALSE\.", 1, 1, "S01_update_rstar_F", ["S:rd"], "all",
@@ -42,16 +45,26 @@ STAGES = [
     (OP, r"CALL GMREDI_CALC_TENSOR\(", 1, 1, "P05_gmredi_tensor", ["S:g"], "tile", "GM/Redi slopes, taper, tensor"),
     (OP, r"CALL GMREDI_DO_EXCH\(", 1, 1, "P06_gmredi_exch", ["S:g"], "all", "GM/Redi tensor halo exchange"),
     (FS, r"CALL DO_OCEANIC_PHYS\(", 1, 1, "S04_oceanic_phys", ["S:fmkgprt"], "all", "all of DO_OCEANIC_PHYS"),
+    (DY, r"BEFORE:CALL IMPLDIFF\(", 1, 4, "D01_before_impl_visc", ["S:a", "T:kappaRU:W:Nr+1", "T:kappaRV:S:Nr+1"],
+     "tile", "explicit gU, gV (after TIMESTEP) and vertical viscosities, input of IMPLDIFF (ALLOW_AUTODIFF path)"),
+    (DY, r"CALL IMPLDIFF\(", 2, 4, "D02_after_impl_visc", ["S:a"], "tile", "gU, gV after implicit viscosity"),
     (FS, r"CALL DYNAMICS\(", 1, 1, "S05_dynamics", ["S:adm"], "all",
      "phi_hyd, momentum tendencies, AB3, implicit viscosity -> gU, gV"),
     (FS, r"CALL UPDATE_R_STAR\(\s*\.TRUE\.", 1, 1, "S06_update_rstar_T", ["S:r"], "all", "r* at the new time"),
     (FS, r"CALL UPDATE_CG2D\(", 1, 1, "S07_update_cg2d", ["S:c"], "all", "cg2d operator + preconditioner"),
+    (SP, r"BEFORE:CALL CG2D\(", 1, 1, "C01_cg2d_inputs", ["G:cg2d_b:C:1", "G:cg2d_x:C:1", "S:c"], "all",
+     "cg2d right-hand side, first guess and operator"),
+    (SP, r"CALL CG2D\(", 1, 1, "C02_cg2d_solution", ["G:cg2d_x:C:1"], "all", "cg2d solution (before exchange)"),
     (FS, r"CALL SOLVE_FOR_PRESSURE\(", 1, 1, "S08_solve_for_pressure", ["S:d"], "all", "cg2d solve -> etaN"),
     (FS, r"CALL MOMENTUM_CORRECTION_STEP\(", 1, 1, "S09_momentum_correction", ["S:d"], "all", "u, v corrected"),
     (FS, r"CALL INTEGR_CONTINUITY\(", 1, 1, "S10_integr_continuity", ["S:d"], "all", "w, etaH"),
     (FS, r"CALL CALC_R_STAR\(", 1, 1, "S11_calc_rstar", ["S:r"], "all", "rStarFac from etaH"),
     (FS, r"CALL DO_STAGGER_FIELDS_EXCHANGES\(", 2, 2, "S12_stagger_exchanges", ["S:d"], "all",
      "exchanges before the staggered tracer step"),
+    (TH, r"CALL GMREDI_RESIDUAL_FLOW\(", 1, 1, "T01_residual_flow", ["T:uFld:W:Nr", "T:vFld:S:Nr", "T:wFld:C:Nr"],
+     "tile", "Eulerian + bolus velocity used by tracer advection"),
+    (TH, r"CALL TEMP_INTEGRATE\(", 1, 1, "T02_temp_integrate", ["S:ta"], "tile", "theta advanced (AB3, implicit)"),
+    (TH, r"CALL SALT_INTEGRATE\(", 1, 1, "T03_salt_integrate", ["S:ta"], "tile", "salt advanced (AB3, implicit)"),
     (FS, r"CALL THERMODYNAMICS\(", 2, 2, "S13_thermodynamics", ["S:ta"], "all",
      "GM residual flow, DST3 advection, diffusion, AB3 on theta/salt, implicit vertical"),
     (FS, r"CALL TRACERS_CORRECTION_STEP\(", 1, 1, "S14_tracers_correction", ["S:t"], "all", "end of step"),
@@ -63,7 +76,8 @@ _CONT = re.compile(r"^     [^ 0]")
 
 # forward_step.F advances the counter right after DYNAMICS (myIter = nIter0 + iLoop, forward_step.F:823 in c66g
 # and both overrides): stages after that point pass myIter-1 so every record of one step carries the step's START iteration.
-AFTER_ITER_UPDATE = {"S06_update_rstar_T", "S07_update_cg2d", "S08_solve_for_pressure", "S09_momentum_correction",
+AFTER_ITER_UPDATE = {"C01_cg2d_inputs", "C02_cg2d_solution", "T01_residual_flow", "T02_temp_integrate",
+                     "T03_salt_integrate", "S06_update_rstar_T", "S07_update_cg2d", "S08_solve_for_pressure", "S09_momentum_correction",
                      "S10_integr_continuity", "S11_calc_rstar", "S12_stagger_exchanges", "S13_thermodynamics",
                      "S14_tracers_correction"}
 
@@ -77,10 +91,14 @@ def _calls(stage, dumps, scope):
         if kind == "S":
             out += [f"      CALL JAXDUMP_STATE( '{stage}', '{rest}',",
                     f"     &                    {bi}, {bj}, {it}, myThid )"]
-        else:
+        elif kind == "T":
             name, pk, nz = rest.split(":")
             out += [f"      CALL JAXDUMP_TILE( '{stage}', '{name}', '{pk}',",
                     f"     &                   {name}, {nz}, bi, bj, {it}, myThid )"]
+        else:  # G
+            name, pk, nz = rest.split(":")
+            out += [f"      CALL JAXDUMP_LOCAL( '{stage}', '{name}', '{pk}',",
+                    f"     &                    {name}, {nz}, {it}, myThid )"]
     return out
 
 
@@ -100,13 +118,17 @@ def instrument(tree, outdir):
         for f, anchor, occ, total, stage, dumps, scope, _ in STAGES:
             if f != fname:
                 continue
-            hits = [i for i, ln in enumerate(lines) if not _COMMENT.match(ln) and re.search(anchor, ln)]
+            before = anchor.startswith("BEFORE:")
+            pat = anchor[len("BEFORE:"):] if before else anchor
+            hits = [i for i, ln in enumerate(lines) if not _COMMENT.match(ln) and re.search(pat, ln)]
             if len(hits) != total:
-                raise SystemExit(f"{src}: anchor {anchor!r} found {len(hits)} times, expected {total}")
+                raise SystemExit(f"{src}: anchor {pat!r} found {len(hits)} times, expected {total}")
             i = hits[occ - 1]
             j = i + 1
             while j < len(lines) and _CONT.match(lines[j]):
                 j += 1
+            if before:
+                j = i
             inserts.setdefault(j, []).extend(_calls(stage, dumps, scope))
             report.append((stage, fname, str(src.relative_to(REPO)), i + 1, scope, dumps))
         if fname == FS:
@@ -134,8 +156,9 @@ def markdown():
         locs = []
         for tree in ("full", "ff"):
             src = source_for(tree, f)
+            pat = anchor.split("BEFORE:", 1)[-1]
             hits = [i for i, ln in enumerate(src.read_text().split("\n"))
-                    if not _COMMENT.match(ln) and re.search(anchor, ln)]
+                    if not _COMMENT.match(ln) and re.search(pat, ln)]
             locs.append(f"{src.relative_to(REPO).as_posix().replace('ECCO-v4-Configurations/ECCOv4 Release 4/', '')}"
                         f":{hits[occ - 1] + 1}")
         rows.append(f"| `{stage}` | {' / '.join(locs)} | {scope} | {', '.join(dumps)} | {what} |")

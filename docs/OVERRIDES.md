@@ -56,6 +56,9 @@ different forward branches under it, e.g.:
   (without AUTODIFF only `IF (doResetHFactors)`).
 - `model/src/do_oceanic_phys.F:286–298`: `saltPlumeDepth`/`saltPlumeFlux` zeroed at the start of each step.
 - `model/src/dynamics.F:327–328`: `phiHydLow` zeroed each step; `forward_step.F:800–812`: `momStepping` guards removed.
+- `model/src/dynamics.F:579–608`: implicit vertical viscosity goes through `IMPLDIFF` (tridiagonal on gU, gV with
+  kappaRU/kappaRV); without `ALLOW_AUTODIFF` the same namelist (`implicitViscosity=T`) would take
+  `MOM_U/V_IMPLICIT_R` instead. Port `IMPLDIFF` (Task 14c).
 
 **For Task 4/5:** the Fortran oracle must be built with the full `packages.conf` (autodiff included) even for forward
 runs, and the JAX port must follow the `ALLOW_AUTODIFF` branches. Task 5's gcov run lists which ones execute.
