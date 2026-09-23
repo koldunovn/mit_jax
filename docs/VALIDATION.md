@@ -30,6 +30,7 @@ built with `-ffp-contract=off`) and pass float parameters as traced pytree leave
 | **one month free run** (744 steps, useCTRL=F twin), CPU gate flags | **T, S, U, V, W, Eta bitwise** vs Fortran at it 745; every hourly %MON to print precision |
 | one month on one A100 (default XLA flags) vs Fortran twin | %MON <= 1e-11 rel; SST max 1.2e-7 degC (60,640/60,646 float32 equal) |
 | production config on one A100 from the pickup vs Fortran 96 ranks, one month | every global %MON stat <= 4e-13 rel |
+| discrete volume / SSH / heat / salt budgets per step (48 steps) | close to round-off: <= 5.4 / 0.8 / 37 / 7.7 floors; Fortran's own steps <= 3.5; negative controls >= 1e4 floors (test_budgets) |
 | Fortran yardsticks | 96-rank twin bitwise; 13-tile vs 96-rank spread 1e-8 after 1 day; 11 steps vs PO.DAAC product T 4e-4 max |
 | sharded: shard_map P=2, P=4 (CPU fake devices) | bitwise == P=1 full step (test_sharded, test_sharded_step) |
 | 4 A100 vs 1 A100 (Task 20) | forward bitwise after 24 steps; GPU floor 0; gradient 1.5e-11 |
