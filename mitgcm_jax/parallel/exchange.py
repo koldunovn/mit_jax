@@ -174,6 +174,10 @@ class Exchanger:
     def exch_uv_bgrid(self, u, v, with_signs=True):
         return self.vector(u, v, "Bs" if with_signs else "Bn")
 
+    def global_max(self, a):
+        """_GLOBAL_MAX_RL over every tile of a [nTiles, ...] array (max is order-free); single device."""
+        return jnp.max(a)
+
 
 def default_exchanger(layout=None):
     L = layout or Layout()
