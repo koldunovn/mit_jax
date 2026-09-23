@@ -57,5 +57,9 @@ Fortran: 13-tile serial 1 core ~3.2 s/step; 96 ranks ~0.2 s/step. JAX: one A100 
 cg2d sum unroll 5, bitwise); 64 CPU cores ~3.5 s/step (gate flags); 4 A100 0.43 s/step (LLC90 too small to scale).
 One GH200 (dolpung, aarch64): 0.10 s/step (production ff, cg2d unroll 5; job 27647358).
 Sea-ice SEAICE_DYNSOLVER (literal LSR sweep order, M2.4): bitwise with the Fortran on CPU, A100 and GH200 (same
-sweep counts), but launch-bound on GPUs: 183 ms/sweep (A100-40), 92 ms/sweep (GH200) = 13-54 s per step, vs
-~3.5 ms/sweep on 16 CPU cores (~1.2 s/step). scripts/runs/gpu_lsr_bench.py.
+sweep counts). With lax.scan it is launch-bound on GPUs: 183 ms/sweep (A100-40), 92 ms/sweep (GH200) = 13-54 s per
+step, vs ~3.5 ms/sweep on 16 CPU cores (~1.2 s/step). Default lsr_impl="auto" (seaice_lsr.py "Implementations"):
+CUDA runs the forward sweep as one Pallas kernel: whole dynsolver 0.78 / 0.51 / 0.38 s per step (GH200) and
+1.18 / 0.78 / 0.58 s (A100-40) at iterations 1 / 2 / 3, still bitwise with the Fortran and with the XLA path (all 32
+outputs, same sweep counts); other GPUs the fully unrolled XLA sweep (1.70 / 1.12 / 0.82 s GH200, 2.87 / 1.89 / 1.39 s
+A100). scripts/runs/lsr_perf_bench.py --full (jobs 27648486, 27648487).

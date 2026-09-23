@@ -22,10 +22,27 @@ bitwise those of P = 1 (global max via Exchanger.global_max; lane counts from th
 
 Gates (mitgcm_jax/tests/test_seaice_dyn.py, oracle full_jaxdump_v5, iterations 1-3): every LSR stage (L01-L04 of both
 Picard passes, Y05) bitwise at every point, LSOR sweeps 178/118, 112/82, 84/58 as in the Fortran.
-Cost (CPU, 16 cores, warm): ~3.5 ms per LSOR sweep (u and v, exchange included); a whole SEAICE_DYNSOLVER with 296
-sweeps ~1.2 s. Each sweep is 90 sequential lines x (89 + 89) sequential Thomas steps: on a GPU every scan step is a
-kernel launch, so this literal form is expected to be slow there (not measured; an unrolled inner scan keeps the
-Fortran operation order, as cg2d's sum_unroll does).
+
+Implementations (SeaiceDynParams.lsr_impl, static; all perform the same operations in the same order and are bitwise
+equal to each other and to the Fortran on CPU, A100 and GH200: whole dynsolver, iterations 1-3, sweep counts 178/118,
+112/82, 84/58; scripts/runs/lsr_perf_bench.py --full). Each sweep is 90 sequential lines x (89 + 89) sequential Thomas
+steps, ~16k sequential scan steps: on a GPU every XLA scan step costs at least one kernel launch.
+  - "xla": lax.scan (unroll XLA_UNROLL = 1). CPU 16 cores: ~3.5 ms/sweep, whole dynsolver 1.2-1.6 s at iteration 1
+    (296 sweeps; shared node). GPU: whole dynsolver 53 / 35 / 26 s per step (A100-40) and 27.6 / 18.1 / 13.2 s
+    (GH200) at iterations 1 / 2 / 3 (180 / 93 ms per sweep). XLA_UNROLL = 2 is bitwise too and measured 0-12% faster
+    on CPU, within the noise of the shared node: not changed.
+  - "xla_unrolled": the Thomas scans fully unrolled (lax.scan unroll=True): one XLA loop over the 90 lines. Whole
+    dynsolver 2.87 / 1.89 / 1.39 s (A100-40), 1.70 / 1.12 / 0.82 s (GH200); compile 2.5-4 s; CPU 6.5 ms/sweep (slower
+    than "xla").
+  - "pallas": the forward sweep as one Pallas-Triton kernel launch (seaice_lsr_pallas.py; CUDA). Whole dynsolver
+    1.18 / 0.78 / 0.58 s (A100-40, 4.0 ms per sweep) and 0.78 / 0.51 / 0.38 s (GH200, 2.6 ms per sweep); first call
+    (compile) 6.5 / 4.3 s.
+  - "auto" (default): lax.platform_dependent at lowering: cpu -> "xla", cuda -> "pallas", other platforms (rocm, tpu)
+    -> "xla_unrolled" (Pallas on ROCm untested: seaice_lsr_pallas.py).
+The implicit derivative never uses the Pallas kernel: its preconditioner sweep (_precond, transposed by
+jax.linear_transpose) is XLA code, with the Thomas scans fully unrolled off the CPU (_precond_impl). Tangent / gradient
+of one LSOR solve (GMRES 40 x 8 cycles) on a GH200: 2.7 / 3.0 s unrolled, 31 / 31 s with lax.scan; A100-40
+3.3 / 6.6 s unrolled; CPU 22 / 20 s.
 
 LSOR sweep (SEAICE_LSR_TRIDIAGU/V, non-zebra, non-vectorised): for u the rows J=1..sNy are visited in order and row J
 uses the NEW row J-1 (Gauss-Seidel by lines), the OLD row J+1 and the halo columns i=0, sNx+1; each row is a Thomas
@@ -383,8 +400,9 @@ def _lines(co, L):
     return dict(A=A, B0=B[:, 0], Clast=C[:, -1], bet=bet, CUU=CUU, Rt1=Rt1, Rt2=Rt2, rhs=rhs, mask=mask)
 
 
-def _thomas(r, A_r, B0_r, bet_r, CUU_r):
-    """Tridiagonal solve along one line (seaice_lsr.F:1825-1855 / :1978-2009). r, A_r, bet_r, CUU_r: [along, lanes]."""
+def _thomas(r, A_r, B0_r, bet_r, CUU_r, unroll=1):
+    """Tridiagonal solve along one line (seaice_lsr.F:1825-1855 / :1978-2009). r, A_r, bet_r, CUU_r: [along, lanes].
+    unroll: lax.scan unroll of both substitutions (the same operations in the same order)."""
     y0 = r[0] / B0_r  # :1826 / :1979
 
     def fwd(yp, xs):
@@ -392,7 +410,7 @@ def _thomas(r, A_r, B0_r, bet_r, CUU_r):
         y = (r_i - A_i * yp) / b_i  # :1841 / :1994
         return y, y
 
-    _, ys = lax.scan(fwd, y0, (r[1:], A_r[1:], bet_r[1:]))
+    _, ys = lax.scan(fwd, y0, (r[1:], A_r[1:], bet_r[1:]), unroll=unroll)
     y = jnp.concatenate([y0[None], ys])
 
     def bwd(yn, xs):  # DO I=iMin,iMax-1: IM=sNx-I (:1846-1855): IM = sNx-1 .. 1, using the updated URT(IM+1)
@@ -400,11 +418,11 @@ def _thomas(r, A_r, B0_r, bet_r, CUU_r):
         v = y_i - c_i * yn  # :1854 / :2008
         return v, v
 
-    _, yb = lax.scan(bwd, y[-1], (y[:-1], CUU_r[:-1]), reverse=True)
+    _, yb = lax.scan(bwd, y[-1], (y[:-1], CUU_r[:-1]), reverse=True, unroll=unroll)
     return jnp.concatenate([yb, y[-1:]])
 
 
-def _sweep(ln, tmp, lo, hi, prev0, nxt, w):
+def _sweep(ln, tmp, lo, hi, prev0, nxt, w, unroll=1):
     """One LSOR sweep of u (rows) and v (columns) together, literal TRIDIAGU/V (seaice_lsr.F:1808-1870 /
     :1958-2022). tmp: [line, along, lane] current interior values (uTmp/vTmp); lo/hi: [line, lane] along-line halo
     values (uIce(0,J), uIce(sNx+1,J) / vIce(I,0), vIce(I,sNy+1)); prev0: [along, lane] the halo line before the first
@@ -417,7 +435,7 @@ def _sweep(ln, tmp, lo, hi, prev0, nxt, w):
         AA3 = AA3.at[0].set(AA3[0] - A_r[0] * lo_r)  # :1812 / :1962 (I.EQ.iMin)
         AA3 = AA3.at[-1].set(AA3[-1] - Cl_r * hi_r)  # :1813 / :1963 (I.EQ.iMax)
         r = (((rhs_r + AA3) + Rt1_r * prev) + Rt2_r * nx_r) * mask_r  # :1815-1819 / :1965-1969
-        y = _thomas(r, A_r, B0_r, bet_r, CUU_r)
+        y = _thomas(r, A_r, B0_r, bet_r, CUU_r, unroll)
         xn = tmp_r + w * (y - tmp_r)  # :1866-1867 / :2019-2020
         return xn, xn
 
@@ -438,11 +456,58 @@ def _halo_parts(u, v, L):
     return lo, hi, prev0, nxt
 
 
+LSR_IMPLS = ("auto", "pallas", "xla_unrolled", "xla", "pallas_interpret")
+XLA_UNROLL = 1  # lax.scan unroll of the Thomas substitutions on the "xla" path (module docstring, "Implementations")
+
+
+def _check_impl(p):
+    if p.lsr_impl not in LSR_IMPLS:
+        raise ValueError(f"lsr_impl = {p.lsr_impl!r}: one of {LSR_IMPLS}")
+    return p.lsr_impl
+
+
+def _sweep_impl(p, ln):
+    """The forward sweep (tmp, lo, hi, prev0, nxt, w) -> new interior selected by the static option p.lsr_impl (module
+    docstring, "Implementations"): "xla" = _sweep with lax.scan (unroll XLA_UNROLL), "xla_unrolled" = _sweep with the
+    Thomas scans fully unrolled, "pallas" = seaice_lsr_pallas.sweep (one Triton kernel per sweep), "pallas_interpret"
+    = that kernel run by the Pallas interpreter (CPU tests), "auto" = lax.platform_dependent: cpu -> "xla",
+    cuda -> "pallas", any other platform (rocm, tpu, ...) -> "xla_unrolled" (only the branch of the platform the
+    computation is lowered for is compiled). All are the same operations in the same order."""
+    impl = _check_impl(p)
+    xla = partial(_sweep, ln, unroll=XLA_UNROLL)
+    xla_unrolled = partial(_sweep, ln, unroll=True)
+    if impl == "xla":
+        return xla
+    if impl == "xla_unrolled":
+        return xla_unrolled
+    from mitgcm_jax.pkgs import seaice_lsr_pallas as slp
+    lp = slp.pack_lines(ln)  # once per Picard pass, outside the sweep loop (dead code on the other branches)
+    pallas = partial(slp.sweep, lp, interpret=impl == "pallas_interpret")
+    if impl != "auto":
+        return pallas
+    return lambda *a: lax.platform_dependent(*a, cpu=xla, cuda=pallas, default=xla_unrolled)
+
+
+def _precond_impl(p, ln, L, w):
+    """The preconditioner sweep of the implicit derivative (traceable XLA code, transposed by jax.linear_transpose):
+    Thomas scans as the forward path's XLA form ("xla" -> XLA_UNROLL; "xla_unrolled", "pallas", "pallas_interpret" ->
+    fully unrolled; "auto" -> lax.platform_dependent: cpu XLA_UNROLL, any other platform fully unrolled)."""
+    impl = _check_impl(p)
+    rolled = partial(_precond, ln, L, w, unroll=XLA_UNROLL)
+    unrolled = partial(_precond, ln, L, w, unroll=True)
+    if impl == "xla":
+        return rolled
+    if impl != "auto":
+        return unrolled
+    return lambda b: lax.platform_dependent(b, cpu=rolled, default=unrolled)
+
+
 def _lsor_fortran(p, ex, co, u, v, max_iter, lsr_error):
     """The LSOR loop (seaice_lsr.F:617-836) from uIce=u, vIce=v. Returns (u, v, info)."""
     L = ex.L
     T = u.shape[0]  # local tiles (sharded: this device's block), not L.nTiles
     ln = _lines(co, L)
+    sweep = _sweep_impl(p, ln)
     J, I = L.js(1, L.sNy), L.is_(1, L.sNx)
     mU = co["seaiceMaskU"][:, J, I]
     mV = co["seaiceMaskV"][:, J, I]
@@ -456,7 +521,7 @@ def _lsor_fortran(p, ex, co, u, v, max_iter, lsr_error):
         tmp = jnp.concatenate([_to_lines_u(uTmp, L), _to_lines_v(vTmp, L)], axis=-1)
         lo, hi, prev0, nxt = _halo_parts(uTmp, vTmp, L)
         w = jnp.concatenate([jnp.full((T,), wu), jnp.full((T,), wv)])
-        rows = _sweep(ln, tmp, lo, hi, prev0, nxt, w)  # :760-774
+        rows = sweep(tmp, lo, hi, prev0, nxt, w)  # :760-774
         un = uTmp.at[:, J, I].set(_from_lines_u(rows[..., :T], L))
         vn = vTmp.at[:, J, I].set(_from_lines_v(rows[..., T:], L))
         check = (m % p.SOLV_NCHECK) == 0  # :784, :809
@@ -527,8 +592,9 @@ def _matvec(ex, co, inner, x):
     return (-Fu, -Fv)
 
 
-def _precond(ln, L, w, b):
-    """P b = omega (D - omega L)^-1 b: one line-SOR sweep from a zero iterate with zero halos (linear in b)."""
+def _precond(ln, L, w, b, unroll=1):
+    """P b = omega (D - omega L)^-1 b: one line-SOR sweep from a zero iterate with zero halos (linear in b).
+    unroll: lax.scan unroll of the Thomas substitutions (_precond_impl)."""
     T = b[0].shape[0]
     bl = jnp.concatenate([_to_lines_u(b[0], L), _to_lines_v(b[1], L)], axis=-1)
     n_along, lanes = bl.shape[1], bl.shape[2]
@@ -536,7 +602,7 @@ def _precond(ln, L, w, b):
     def line(prev, xs):
         b_r, A_r, Rt1_r, mask_r, bet_r, CUU_r, B0_r = xs
         r = (b_r + Rt1_r * prev) * mask_r
-        y = _thomas(r, A_r, B0_r, bet_r, CUU_r)
+        y = _thomas(r, A_r, B0_r, bet_r, CUU_r, unroll)
         xn = w * y
         return xn, xn
 
@@ -632,7 +698,7 @@ def _lsor_implicit_jvp(static, primals, tangents):
     T = u.shape[0]
     w = jnp.concatenate([jnp.full((T,), p.SEAICE_LSRrelaxU), jnp.full((T,), p.SEAICE_LSRrelaxV)])
     A = partial(_matvec, ex, co, inner)
-    P = partial(_precond, ln, L, w)
+    P = _precond_impl(p, ln, L, w)
     m, cycles = p.lsr_ad_restart, p.lsr_ad_cycles
     gsum = ex.global_sum_tile
 

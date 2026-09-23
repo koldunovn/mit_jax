@@ -96,6 +96,10 @@ class SeaiceDynParams:
     useCubedSphereExchange: bool  # eedata
     lsr_ad_restart: int = 40  # JAX only: GMRES restart length of the implicit-derivative solves (seaice_lsr.py)
     lsr_ad_cycles: int = 8  # JAX only: fixed number of GMRES restart cycles
+    # JAX only: implementation of the LSOR sweeps (seaice_lsr.py "Implementations"; the same operations in the same
+    # order, bitwise equal): "auto" (CPU: "xla"; CUDA: "pallas" forward; other backends: "xla_unrolled"), or an
+    # explicit "pallas" | "xla_unrolled" | "xla" (| "pallas_interpret": the Pallas kernel interpreted, CPU tests)
+    lsr_impl: str = "auto"
 
     @classmethod
     def from_namelists(cls, nml, lsr_ad_restart=40, lsr_ad_cycles=8):

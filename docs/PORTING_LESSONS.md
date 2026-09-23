@@ -451,3 +451,27 @@ Production runs may use XLA defaults (ulp-level differences only).
 - In the full ECCO configuration the saltPlumeFlux seam is redundant (the sea-ice skip already cuts that path); only
   the depth seam changes derivatives. AdjointConfig.seaice defaults to "ecco" everywhere (Nikolay).
 - CPU cost: ~6.3 s/step (16-32 cores, sequential LSR sweeps dominate); compile ~45 s; setup + init ~4-5 min.
+
+## LSR on GPU — Pallas forward sweep, unrolled XLA fallback (2026-09-23, sub-agent, branch lsr-perf)
+- The literal LSOR sweep (90 lines x 2 Thomas substitutions of 89 steps, ~16k sequential scan steps) was launch-bound
+  on GPUs (A100-40 181 ms, GH200 92 ms/sweep). Three faster forms keep the operation order and are bitwise equal to
+  the Fortran on CPU, A100 and GH200 (whole dynsolver it 1-3, sweep counts 178/118, 112/82, 84/58): lax.scan unroll of
+  the Thomas scans (full unroll: dynsolver 1.70/1.12/0.82 s/step GH200, 2.87/1.89/1.39 A100; u2/u8 barely help on
+  GPU; full unroll is slower on CPU), and one Pallas-Triton kernel per sweep (dynsolver 0.78/0.51/0.38 s/step on
+  GH200, 1.18/0.78/0.58 on A100, vs 27.6/18.1/13.2 and 53/35/26 s with lax.scan). lsr_impl="auto": cpu -> xla, cuda -> pallas, other ->
+  xla_unrolled, via lax.platform_dependent (only the lowered platform's branch is compiled).
+- XLA's Triton pipeline emits mul.rn/sub.rn/div.rn.f64 — no FMA contraction (checked in the PTX via --xla_dump_to),
+  which is why the GPU kernel is bitwise with the gfortran -ffp-contract=off oracle.
+- Measure the floor before tuning: a dependent (mul, sub, div.rn.f64) step costs 151 ns on an A100-40 and 64 ns on a
+  GH200, so the forward substitution alone is >= 1.2 / 0.5 ms per sweep. Ablation of the kernel (remove one phase at a
+  time, timing only) showed where the rest goes: load latency in the forward chain, not launches or the block passes.
+  Loads issued one 8-step chunk ahead (loop-carried) halved the kernel time; larger distances, more/fewer warps,
+  unrolled block loops and staging coefficients through scratch did not help.
+- The Pallas interpreter runs the kernel's own jaxpr on CPU: a bitwise gate for the kernel's operation order, with a
+  planted reassociation as negative control. It fails under shard_map(check_vma=True) (its internal scans mix
+  varying and invariant carries); the compiled kernel works there (4 GH200 == 1 GH200 bitwise). A pallas_call inside
+  shard_map(check_vma=True) needs manual_axis_type on its out_shape (taken from the iterate).
+- The implicit derivative keeps XLA: the GMRES preconditioner sweep is transposed by jax.linear_transpose; fully
+  unrolling its Thomas scans off the CPU makes one LSOR tangent/gradient 2.7/3.0 s instead of 31/31 s on a GH200
+  (adjoint vs tangent 5e-16).
+- sbatch --export=ALL,VAR="a,b c" splits VAR at the comma: pass script arguments after the script name instead.

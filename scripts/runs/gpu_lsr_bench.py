@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """M2.4 cost check: SEAICE_DYNSOLVER (LSR, literal Fortran sweep order) on the device this runs on, from the full-tree
 oracle's inputs at iterations 1-3. Prints the time per call (after compile), the LSOR sweep counts and the difference
-to the Fortran's I01 UICE/VICE (bitwise on CPU with the gate flags; round-off on GPU).
+to the Fortran's I01 UICE/VICE (bitwise on CPU with the gate flags, and on A100/GH200). Default lsr_impl ("auto": the
+Pallas sweep on CUDA); the comparison of implementations is scripts/runs/lsr_perf_bench.py.
 
     python scripts/runs/gpu_lsr_bench.py [--repeat 3]     (sbatch -p gpu-devel scripts/runs/gpu_lsr_bench.sbatch)
 """
