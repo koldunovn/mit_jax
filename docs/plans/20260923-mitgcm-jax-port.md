@@ -135,8 +135,8 @@
 - Create: `reference/build.sh`, `reference/optfile_levante_gfortran`, `reference/SIZE.h_13x90x90`, `reference/data.exch2_13`, `reference/run.sh`, `reference/jobs/*.sbatch`, `reference/README.md`, `docs/REFERENCE_RUNS.md`
 - Create: `scripts/tests/test_reference.py`
 
-- [ ] gfortran builds (strict FP; document ifort vs gfortran) of both trees, **with the full `packages.conf` (autodiff/ctrl/ecco compiled: `ALLOW_AUTODIFF` changes forward branches, `docs/OVERRIDES.md`)**: MPI 96×(30×30) and **serial 13×(90×90) = per-substep oracle** (blankList adapted); `GLOBAL_SUM_ORDER_TILES` status recorded
-- [ ] frozen binaries under `/work/.../MIT/reference/bin/` with sha256
+- [x] gfortran builds (strict FP; document ifort vs gfortran) of both trees, **with the full `packages.conf` (autodiff/ctrl/ecco compiled: `ALLOW_AUTODIFF` changes forward branches, `docs/OVERRIDES.md`)**: MPI 96×(30×30) and **serial 13×(90×90) = per-substep oracle** (blankList adapted); `GLOBAL_SUM_ORDER_TILES` status recorded
+- [x] frozen binaries under `/work/.../MIT/reference/bin/` with sha256 (+ `_jaxdump`, `_gcov` variants; `reference/make_rundir.py`, `reference/jobs/run.sbatch`)
 - [ ] runs: full V4r4 11 steps vs PO.DAAC snapshot; flux-forced and full V4r4 1 month + 1 year (96 ranks); same runs on 13-tile serial/other tiling = run-to-run spread yardstick; decide whether ecco/profiles packages can be dropped for the reference (document)
 - [ ] provenance (binary sha, namelists, ranks, wall time) in `docs/REFERENCE_RUNS.md`
 - [ ] write tests (achievable): 11-step fields vs PO.DAAC snapshot within float32 + compiler floor; two runs of the same binary bitwise identical; 96-rank vs 13-tile difference recorded as spread
@@ -147,13 +147,13 @@
 - Create: `reference/jaxdump/{jaxdump.F,JAXDUMP.h,SUBSTEPS.md}`, `reference/jaxdump/patches/{fluxforced,full}/*.patch`
 - Create: `mitgcm_jax/io/dump.py`, `tools/diffdump.py`, `mitgcm_jax/tests/test_dump_io.py`
 
-- [ ] env-gated (`JAXDUMP_DIR`, `JAXDUMP_STEPS`) per-substep dumps with global (facet,i,j,k) keys **including halo values**; patches for both trees; SUBSTEPS.md final
-- [ ] routine-input dumps for replay (grad_sigma/IVDC/mxlayer, GGL90, GM taper/tensor, salt-plume depth, cg2d rhs/operator, implicit vertical solves, mom_calc_visc; later bulk formulae, ice thermo)
+- [x] env-gated (`JAXDUMP_DIR`, `JAXDUMP_STEPS`) per-substep dumps with global (facet,i,j,k) keys **including halo values**; patches for both trees; SUBSTEPS.md final
+- [ ] ⏳ (done: rho/sigma/IVDC/mxlayer, salt-plume depth, GGL90, GM tensor, cg2d rhs/x/operator, IMPLDIFF in/out, residual flow, tracer integrate; remaining stages are added in the kernel task that needs them via the STAGES table) routine-input dumps for replay (grad_sigma/IVDC/mxlayer, GGL90, GM taper/tensor, salt-plume depth, cg2d rhs/operator, implicit vertical solves, mom_calc_visc; later bulk formulae, ice thermo)
 - [ ] matched-restart mode (start from any Fortran pickup, dump there)
-- [ ] gcov-instrumented run (1 day, both trees) → `docs/BRANCHES.md`: routines/branches actually executed = port scope
-- [ ] dumps off ⇒ output byte-identical to uninstrumented build
-- [ ] `tools/diffdump.py`: first (step, substep, field) above tolerance; wet masking; vector frames; zero-on-both-sides flag
-- [ ] write tests: reader round-trip; diffdump negative control (planted difference caught, identical passes, all-zero flagged)
+- [ ] ⏳ (GCOV builds + `tools/branch_coverage.py` ready; ff 1-day run queued with the forcing) gcov-instrumented run (1 day, both trees) → `docs/BRANCHES.md`: routines/branches actually executed = port scope
+- [x] dumps off ⇒ output byte-identical to uninstrumented build (also with dumps ON; smoke runs, `scripts/tests/test_reference.py`)
+- [x] `tools/diffdump.py`: first (step, substep, field) above tolerance; wet masking; vector frames; zero-on-both-sides flag
+- [x] write tests: reader round-trip; diffdump negative control (planted difference caught, identical passes, all-zero flagged)
 - [ ] run tests — must pass before Task 6
 
 ### Task 6: Grid and geometry loader
