@@ -50,3 +50,7 @@ built with `-ffp-contract=off`) and pass float parameters as traced pytree leave
 ## Performance (LLC90, 50 levels)
 Fortran: 13-tile serial 1 core ~3.2 s/step; 96 ranks ~0.2 s/step. JAX: one A100 0.34 s/step (0.14 s/step with
 cg2d sum unroll 5, bitwise); 64 CPU cores ~3.5 s/step (gate flags); 4 A100 0.43 s/step (LLC90 too small to scale).
+One GH200 (dolpung, aarch64): 0.10 s/step (production ff, cg2d unroll 5; job 27647358).
+Sea-ice SEAICE_DYNSOLVER (literal LSR sweep order, M2.4): bitwise with the Fortran on CPU, A100 and GH200 (same
+sweep counts), but launch-bound on GPUs: 183 ms/sweep (A100-40), 92 ms/sweep (GH200) = 13-54 s per step, vs
+~3.5 ms/sweep on 16 CPU cores (~1.2 s/step). scripts/runs/gpu_lsr_bench.py.

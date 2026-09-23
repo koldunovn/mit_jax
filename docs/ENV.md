@@ -79,3 +79,15 @@ wheel==0.48.0
 
 - Which JAX features broke in fesom_jax on newer versions (not in port_jax docs; its ENV.md says 0.11.0
   ran the suite). Needed to design the upgrade canary.
+
+## dolpung (GH200, aarch64) — 2026-09-23
+
+Venv `/work/ab0995/a270088/MIT/envs/mitgcm-jax-arm`: Python 3.12.13 from the ARM spack tree
+(`/sw/spack-levante-0.23.1/linux-rhel9-neoverse_v2/python-3.12.13-hzcoloj`) + the `constraints.txt` set (jax 0.10.1,
+CUDA 12.9 wheels), installed offline: `scripts/dolpung/fetch_wheels.sbatch` (shared partition, x86, internet; pip
+`--platform` must list every `manylinux_2_17..2_34_aarch64` tag — it does not expand to older glibc tags) ->
+`scripts/dolpung/make_env.sbatch` (dolpung node; J0 gate: GPU visible, float64 matmul). Freeze:
+`/work/ab0995/a270088/MIT/runs/dolpung/pip_freeze_arm.txt`. Run: `source scripts/dolpung/env_dolpung.sh; $PY ...`
+inside a job with `-A mh1571 -p dolpung` (logins are x86; the env file strips the x86 PATH entries srun exports).
+Measured: production ff 0.10 s/step on one GH200 (A100-80: 0.17). CPU gates stay on x86 (the bitwise gate flags are
+x86 AVX-specific).
