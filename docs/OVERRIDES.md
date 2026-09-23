@@ -464,3 +464,13 @@ compiles the c66g header). Context shows enclosing `#if` conditions, without inc
 | `SEAICE_OPTIONS.h` | `SEAICE_LSR_ZEBRA` | undef [if SEAICE_CGRID] | absent | absent |
 | `SEAICE_OPTIONS.h` | `SEAICE_VECTORIZE_LSR` | undef [if SEAICE_CGRID] | absent | absent |
 <!-- END CPP -->
+
+### Cost packages (standing override `useECCO=F, useProfiles=F, useCAL=T`) — verified forward-neutral 2026-09-23
+pkg/ecco and pkg/profiles read the model state and write only their own arrays and files: a same-binary 1-day run
+with the production switches is bitwise identical in state, pickups, AD tapes and %MON (docs/REFERENCE_RUNS.md). They
+are not diagnostics-neutral: V4r4 `diagnostics_fill_state.F:75-79` (SSHNOIBC, SSHIBC, SSH) and `dynamics.F:697-700`
+(OBPGMAP, OBP) fill diagnostics from ecco arrays set only by ECCO_PHYS (`forward_step.F:1189`), so these are zero with
+useECCO=F. Inputs: `temp0errfile`, `salt0errfile`, `data_errfile` are never read (`ecco_cost_weights.F` body needs
+`ECCO_CTRL_DEPRECATED`, undefined). `sshv4-mdt` reads RADS for every year of its MDT period (1993-2017) whatever the
+run length, and a missing year is a silent `STOP` (`cost_sla_read_yd.F:105-109`). The flux-forced boxmean mask
+`mask_BeaufortSea{C,W,S,K}` is not published, so that term switches itself off (`ecco_check.F:460-474`).

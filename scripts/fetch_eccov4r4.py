@@ -14,7 +14,8 @@ Interrupted downloads resume from the `.part` size (HTTP Range).
                                                 every member except yearly files (name ending _YYYY) of other years
                                                 and --exclude matches; never overwrites; sha256 manifest of output
 
-Groups are defined in GROUPS below. The two forcing archives (196 GB, 94 GB) are only published whole.
+Groups are defined in GROUPS below. The two forcing archives (196 GB, 94 GB) and data_constraints (9.6 GB) are only
+published whole.
 """
 
 import argparse
@@ -54,6 +55,8 @@ GROUPS = {
     "input_forcing": [(ANCILLARY, {"granule": "ancillary_data_input_forcing_ECCO_V4r4"})],
     # flux-forced forcing, published only as one archive
     "flux_forcing": [(ANCILLARY, {"granule": "ancillary_data_atm_flux_forcing_experiments_ECCO_V4r4"})],
+    # cost-function inputs (observations, weights, sigma files for pkg/ecco and pkg/profiles), one archive (8.9 GiB)
+    "data_constraints": [(ANCILLARY, {"granule": "ancillary_data_data_constraints_ECCO_V4r4"})],
     # geometry and final mixing coefficients (time-invariant)
     "products_fixed": [
         ("ECCO_L4_GEOMETRY_LLC0090GRID_V4R4", {}),

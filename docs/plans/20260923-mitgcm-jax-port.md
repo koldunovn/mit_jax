@@ -409,6 +409,11 @@ parallel on the 4 GPUs of a node).
   (builds on the 2026-09-23 useECCO-neutrality check): per-term cost values (gencost, profiles) and the control
   vectors for 1 year at the V4r4 solution; inventory + download of the observation/weight files (shared-partition
   jobs, resumable; size decides the scope: which data types first).
+- ➕ M4 prerequisites found 2026-09-23: the V4r4 data_constraints are downloaded (8.9 GiB archive, 41 GB unpacked,
+  /work/.../MIT/data/eccov4r4/data_constraints); the cost packages are forward-neutral (bitwise); the profile files'
+  interpolation data are for the production 30x30 tiles (profiles_init_fixed.F:522-526) — JAX (13 x 90x90) must
+  recompute the interpolation from the profile positions (and the gate compares against the 96-rank Fortran's
+  profile misfits); sshv4-mdt reads RADS 1993-2017 for any window.
 - M4.1 Cost function: port pkg/ecco gencost (altimetry: along-track SLA + MDT; SST; sea-ice concentration; SSS and
   GRACE bottom pressure only if the window has them) and pkg/profiles (CTD/XBT/Argo interpolation in space and time),
   with their averaging operators, weights/uncertainties and smoothing; gate: every J term equal to the Fortran's at

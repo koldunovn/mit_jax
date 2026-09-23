@@ -152,3 +152,21 @@ Long full-tree twins (same overrides as `ref_full_serial13_1month`/`_1year`, whi
 |---|---|---|---|---|---|
 | `ref_full_mpi13_1month` | 744 | 3600 | 2592000 | 27649302 (shared, 40 min) | ended normally, 1047 s wall (serial13 3046 s); vs `ref_full_serial13_1month`: 134023 %MON values over 745 blocks and 547/547 files (358 diagnostics, monthly dumps, all pickups) identical, tapes identical per tile |
 | `ref_full_mpi13_1year` | 8760 | 86400 | 2592000 | 27649303 (shared, 5 h) | running (0.59 s/step, ~1.5 h) |
+
+## Cost packages are forward-neutral (verified 2026-09-23)
+
+Same binary, standing override (`useECCO=F, useProfiles=F, useCAL=T`) vs the production `data.pkg`
+(`make_rundir.py --cost-pkgs production`, all `data_constraints` inputs staged; downloaded
+`ancillary_data_data_constraints_ECCO_V4r4.tar.gz`, 8.9 GiB, sha512 OK, unpacked to
+`/work/ab0995/a270088/MIT/data/eccov4r4/data_constraints/`), 1 day: every %MON line and every regular output file
+(state at it 1/25, PH/PHL, pickups incl. seaice/ggl90, AD tapes, grid, xx_*.effective, smooth operators, diags) is
+byte-identical except five diagnostics: `ref_ff_mpi13_1day` vs `prodcost_ff_mpi13_1day` (3242 %MON, 202/203 files;
+also with the boxmean term active via a stand-in mask), `ref_full_mpi13_1day` vs `prodcost_full_mpi13_1day_b` (4757
+%MON, 366/372), `ref_full_mpi96_1day_a` vs `prodcost_full_mpi96_1day` (4757 %MON, 532/538; 69 profiles sampled). The
+five: `diags/{SSH,SSHIBC,SSHNOIBC,OBP,OBPGMAP}_mon_mean`, filled from pkg/ecco's `m_eta*`/`m_bp*` (V4r4
+`code/diagnostics_fill_state.F:75-79`, `code/dynamics.F:697-700`), computed only in ECCO_PHYS (`code/forward_step.F:1189`,
+`IF (useECCO)`). **In every reference run with the standing override these five diagnostics are zero: never compare
+them with PO.DAAC SSH/OBP.** pkg/profiles samples nothing on 90x90 tiles: the observation files' interpolation data are
+for the production 30x30 tiles (`profiles_init_fixed.F:522-526`), so profiles are exercised only on mpi96. Production
+cost mode costs 568 s (mpi13) / 777 s (mpi96) per day instead of 162 s / ~60 s, mostly the `sshv4-mdt` loop over RADS
+1993-2017. Full-tree cost at the V4r4 solution after 1 day: fc = 1942233.03 (mpi13) / 1943605.09 (mpi96, + profiles).

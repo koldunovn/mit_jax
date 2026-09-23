@@ -40,6 +40,18 @@ case below unless a line says "deviation"; each entry gives the evidence and wha
    (`SEAICEuseDYNAMICSswitchInAd` exists for that, :49-51). Port: default = this ECCO semantics; switch to
    "no_dynamics" / "full".
 
+13. **Profile observation files are bound to the production tiling.** The pkg/profiles input files carry
+    interpolation indices for 30x30 tiles (`prof_interp_i` <= 30); a profile is used only if the stored tile-corner
+    coordinates match (`profiles_init_fixed.F:522-526`), so with any other tiling (e.g. 13 x 90x90) no profile is
+    sampled, silently. (Verified 2026-09-23: 0 profiles on 90x90 tiles, 69 on 96 ranks for the same day.)
+14. **Silent STOP on a missing RADS year.** `sshv4-mdt` reads RADS for every year of its MDT period (1993-2017) even for
+    a 1-day 1992 run; a missing year ends the run with a bare `STOP` and no message (`cost_sla_read_yd.F:105-109`).
+15. **SSH/OBP diagnostics depend on useECCO.** With useECCO=F the SSH, SSHIBC, SSHNOIBC, OBP, OBPGMAP diagnostics are
+    silently zero (filled from pkg/ecco arrays computed only in ECCO_PHYS: `diagnostics_fill_state.F:75-79`,
+    `dynamics.F:697-700`, `forward_step.F:1189`).
+16. **Unpublished input.** The flux-forced boxmean cost mask `mask_BeaufortSea{C,W,S,K}` is not in the published data,
+    so that cost term switches itself off (`ecco_check.F:460-474`).
+
 ## Reproducibility / sensitivity (not bugs; they limit twin comparisons)
 
 10. **Loose solver stopping criteria with small margins.** LSR stops at LSR_ERROR = 2e-4 with the last residual at

@@ -3,6 +3,7 @@
 
     make_rundir.py TREE LAYOUT NAME --nsteps N [--monitor SECONDS] [--binary PATH] [--set FILE:GROUP:KEY=VALUE ...]
                    [--pickup-from RUNDIR --niter0 N]    matched restart: start from that run's pickup*.<N> files
+                   [--cost-pkgs production]             keep the production useECCO/useProfiles (no data.pkg override)
 
 TREE = full | ff, LAYOUT = mpi96 | serial13 | mpi13. The directory /work/.../MIT/reference/runs/<NAME> must not exist.
 It gets: the tree's production namelists, the overrides below (every one printed and written to OVERRIDES.txt),
@@ -12,10 +13,13 @@ required input), diagnostics sub-directories, and the executable (newest frozen 
 --binary).
 
 Standing overrides for reference runs (deviations from the production namelists, each documented):
-  data.pkg  useECCO=F, useProfiles=F, useCAL=T   cost-function packages; their observation inputs (data_constraints)
-                                                   are not staged. They do not feed back on the model state (to be
-                                                   confirmed by a same-binary run with them on). useCAL was implied
-                                                   by useECCO/useProfiles (packages_boot.F) and must be set.
+  data.pkg  useECCO=F, useProfiles=F, useCAL=T   cost-function packages off (--cost-pkgs off, the default). useCAL
+                                                   is implied by useECCO/useProfiles (packages_boot.F:206-207) and
+                                                   must then be set.
+            --cost-pkgs production: no data.pkg override (the tree's production useECCO/useProfiles; useCAL implied);
+            the pkg/ecco and pkg/profiles inputs (data_constraints archive) are linked and a missing one that the
+            model reads unconditionally refuses the run; missing inquire-only files (a gencost term switched off)
+            are listed and recorded in OVERRIDES.txt.
   data      nTimeSteps=N, monitorFreq=S          run length and monitor cadence (%MON every S seconds).
 """
 
@@ -81,15 +85,18 @@ def main(argv=None):
     ap.add_argument("--set", nargs="*", default=[], help="extra FILE:GROUP:KEY=VALUE overrides")
     ap.add_argument("--pickup-from", help="run directory whose pickup*.<niter0> files start this run")
     ap.add_argument("--niter0", type=int)
+    ap.add_argument("--cost-pkgs", choices=("off", "production"), default="off",
+                    help="off: standing override useECCO=F, useProfiles=F, useCAL=T; production: keep data.pkg")
     a = ap.parse_args(argv)
 
     run = WORK / "reference" / "runs" / a.name
     if run.exists():
         raise SystemExit(f"{run} exists; choose a new name (nothing is overwritten)")
     src = V4 / ("namelist" if a.tree == "full" else "flux-forced/namelist")
-    overrides = [("data.pkg", "packages", "useECCO", ".FALSE."), ("data.pkg", "packages", "useProfiles", ".FALSE."),
-                 ("data.pkg", "packages", "useCAL", ".TRUE."), ("data", "parm03", "nTimeSteps", str(a.nsteps)),
-                 ("data", "parm03", "monitorFreq", f"{a.monitor:.1f}")]
+    overrides = [] if a.cost_pkgs == "production" else [
+        ("data.pkg", "packages", "useECCO", ".FALSE."), ("data.pkg", "packages", "useProfiles", ".FALSE."),
+        ("data.pkg", "packages", "useCAL", ".TRUE.")]
+    overrides += [("data", "parm03", "nTimeSteps", str(a.nsteps)), ("data", "parm03", "monitorFreq", f"{a.monitor:.1f}")]
     if (a.pickup_from is None) != (a.niter0 is None):
         raise SystemExit("--pickup-from and --niter0 go together")
     if a.pickup_from:
@@ -116,16 +123,25 @@ def main(argv=None):
             got = read_namelist(Path(tmp) / f)[g.lower()][k.lower()]
             print(f"override {f}:{g}:{k} = {v}  (reads back {got})")
         items, unresolved = air.needs(tmp)
-    links, missing = {}, []
+        shipped = {p.name for p in Path(tmp).iterdir()}  # namelist-directory files (e.g. data.err) are copied
+    links, missing, switched_off = {}, [], []
     for n in items:
-        p = air.locate(n.name, n.kind, search)
-        if p is None:
-            if n.required and n.klass == "input":
-                missing.append(n.name)
-        else:
+        if n.klass == "cost" and a.cost_pkgs != "production":
+            continue
+        if n.name in shipped:
+            continue
+        paths, absent = air.resolve(n, search)
+        for p in paths:
             links[p.name] = p
+        if absent and n.required:
+            missing += absent
+        elif absent and n.klass == "cost":
+            switched_off += [f"{x}  <- {n.source}  [{n.why}]" for x in absent]
     if unresolved:
         print("UNRESOLVED:", *unresolved, sep="\n  ")
+    if switched_off:
+        print(f"ABSENT optional cost inputs (inquired; a missing one switches its cost term off): {len(switched_off)}",
+              *switched_off, sep="\n  ")
     if missing:
         print(f"REFUSED: {len(missing)} required inputs missing, e.g. {missing[:6]}")
         return 1
@@ -137,6 +153,10 @@ def main(argv=None):
         o.write(f"tree {a.tree} layout {a.layout} namelists from {src}\n")
         for f, g, k, v in overrides:
             o.write(f"{f}:{g}:{k}={v}\n")
+        if a.cost_pkgs == "production":
+            o.write("cost packages as in the production data.pkg (useCAL implied by packages_boot.F:206-207)\n")
+            for x in switched_off:
+                o.write(f"absent optional cost input: {x}\n")
         if a.layout in ("serial13", "mpi13"):
             o.write("data.exch2 <- reference/data.exch2_13x90x90 (no blankList)\n")
     for name, p in links.items():
