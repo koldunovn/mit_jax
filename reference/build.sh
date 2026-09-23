@@ -2,6 +2,8 @@
 # Build the MITgcm c66g Fortran reference for one ECCO v4r4 tree and tile layout (plan Task 4).
 #
 #   reference/build.sh TREE LAYOUT        TREE = full | ff (flux-forced);  LAYOUT = mpi96 | serial13
+#   variants (env): JAXDUMP=1  instrumented with the per-substep dump shim (reference/jaxdump/instrument.py)
+#                   GCOV=1     -O0 --coverage, for the branch-coverage run (docs/BRANCHES.md)
 #   sbatch reference/jobs/build.sbatch TREE LAYOUT     (preferred: compiles on a shared node)
 #
 # Code dir = the tree's override code (+ SIZE.h for serial13), full packages.conf (autodiff/ctrl/ecco compiled:
@@ -28,16 +30,31 @@ export LEVANTE_NF_PREFIX=$(nf-config --prefix)
 export LEVANTE_NC_LIBDIR=$(dirname "$(ldd "$LEVANTE_NF_PREFIX/lib/libnetcdff.so" | awk '/libnetcdf\.so/ {print $3}')")
 export MPI_INC_DIR=$(dirname "$(which mpif90)")/../include
 
-BUILD=$WORK/build/${TREE}_${LAYOUT}_$(date +%Y%m%d_%H%M%S)
+VARIANT=""
+[ "${JAXDUMP:-0}" = 1 ] && VARIANT="${VARIANT}_jaxdump"
+[ "${GCOV:-0}" = 1 ] && VARIANT="${VARIANT}_gcov"
+BUILD=$WORK/build/${TREE}_${LAYOUT}${VARIANT}_$(date +%Y%m%d_%H%M%S)
 [ -e "$BUILD" ] && { echo "exists: $BUILD"; exit 1; }
 mkdir -p "$BUILD/code" "$BUILD/bld" "$WORK/bin"
 cp "$CODE"/*.F "$CODE"/*.h "$CODE"/packages.conf "$BUILD/code/"
 [ "$LAYOUT" = serial13 ] && cp "$REPO/reference/SIZE.h_13x90x90_serial" "$BUILD/code/SIZE.h"
 cp "$REPO/reference/optfile_levante_gfortran" "$BUILD/"
+if [ "${JAXDUMP:-0}" = 1 ]; then
+  /work/ab0995/a270088/mambaforge/envs/mitgcm-jax/bin/python "$REPO/reference/jaxdump/instrument.py" "$TREE" "$BUILD/code" > "$BUILD/instrument.log"
+fi
+if [ "${GCOV:-0}" = 1 ]; then
+  cat >> "$BUILD/optfile_levante_gfortran" <<'EOG'
+#- GCOV variant (branch coverage): no optimisation, instrumented
+FOPTIM='-O0'
+FFLAGS="$FFLAGS --coverage"
+CFLAGS="$CFLAGS --coverage"
+LIBS="$LIBS --coverage"
+EOG
+fi
 
 cd "$BUILD/bld"
 {
-  echo "tree $TREE  layout $LAYOUT  host $(hostname)  $(date -Is)"
+  echo "tree $TREE  layout $LAYOUT  variant ${VARIANT:-none}  host $(hostname)  $(date -Is)"
   echo "$GITINFO"
   echo "netcdf: fortran $LEVANTE_NF_PREFIX  c $LEVANTE_NC_LIBDIR"
   gfortran --version | head -1; mpif90 --version | head -1; nf-config --version
@@ -54,7 +71,7 @@ make -j "${SLURM_CPUS_PER_TASK:-8}" > ../make.log 2>&1 || { grep -iE "error" ../
 # the compiled package list and CPP defines are the build's truth: keep them next to the binary
 cp PACKAGES_CONFIG.h AD_CONFIG.h ../ 2>/dev/null || true
 SHA=$(sha256sum mitgcmuv | cut -c1-64)
-BIN=$WORK/bin/mitgcmuv_${TREE}_${LAYOUT}_${SHA:0:12}
+BIN=$WORK/bin/mitgcmuv_${TREE}_${LAYOUT}${VARIANT}_${SHA:0:12}
 [ -e "$BIN" ] || cp mitgcmuv "$BIN"
 chmod a-w "$BIN"
 { cat ../provenance.txt; echo "sha256 $SHA"; echo "build $BUILD"; grep -E "^FFLAGS|^FOPTIM|^NOOPTFILES|^LIBS" Makefile

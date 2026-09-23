@@ -58,9 +58,10 @@ def set_value(text, group, key, value):
     return text[:gm.start()] + block2 + text[gm.end():]
 
 
-def newest_binary(tree, layout):
-    bins = sorted((WORK / "reference" / "bin").glob(f"mitgcmuv_{tree}_{layout}_*"), key=lambda p: p.stat().st_mtime)
-    bins = [b for b in bins if not b.name.endswith(".txt")]
+def newest_binary(tree, layout, variant=""):
+    pat = re.compile(rf"mitgcmuv_{tree}_{layout}{variant}_[0-9a-f]{{12}}")
+    bins = sorted((p for p in (WORK / "reference" / "bin").iterdir() if pat.fullmatch(p.name)),
+                  key=lambda p: p.stat().st_mtime)
     if not bins:
         raise SystemExit(f"no binary for {tree}/{layout}; build with reference/jobs/build.sbatch")
     return bins[-1]
@@ -74,6 +75,7 @@ def main(argv=None):
     ap.add_argument("--nsteps", type=int, required=True)
     ap.add_argument("--monitor", type=float, default=3600.0)
     ap.add_argument("--binary")
+    ap.add_argument("--variant", default="", help="binary variant suffix, e.g. _jaxdump or _gcov")
     ap.add_argument("--set", nargs="*", default=[], help="extra FILE:GROUP:KEY=VALUE overrides")
     a = ap.parse_args(argv)
 
@@ -134,7 +136,7 @@ def main(argv=None):
     for k, v in dg.items():
         if k.startswith("filename(") and v and "/" in v[0]:
             (run / v[0]).parent.mkdir(parents=True, exist_ok=True)
-    binary = Path(a.binary) if a.binary else newest_binary(a.tree, a.layout)
+    binary = Path(a.binary) if a.binary else newest_binary(a.tree, a.layout, a.variant)
     (run / "mitgcmuv").symlink_to(binary)
     air.audit(run, sha_out=run / "INPUTS.sha256")
     print(f"RUNDIR {run}  binary {binary.name}")
