@@ -62,7 +62,7 @@ def _render(a, files, idx, png):
         cax = fig.add_axes([0.2, 0.07, 0.6, 0.022])
         sm = plt.cm.ScalarMappable(cmap=a.cmap, norm=plt.Normalize(a.vmin, a.vmax))
         cb = fig.colorbar(sm, cax=cax, orientation="horizontal")
-        cb.set_label(f"sea surface temperature ({a.units})", color="w")
+        cb.set_label(f"{a.cbar_label} ({a.units})", color="w")
         cb.ax.tick_params(colors="w")
         fig.text(0.5, 0.955, a.label, ha="center", color="w", fontsize=13)
         fig.text(0.5, 0.925, str(z["date"]), ha="center", color="#c8d0e0", fontsize=11)
@@ -88,6 +88,7 @@ def main(argv=None):
     ap.add_argument("--resolution", type=float, default=0.5)
     ap.add_argument("--label", default="MITgcm (JAX port), ECCO v4r4 LLC90")
     ap.add_argument("--units", default="°C")
+    ap.add_argument("--cbar-label", default="sea surface temperature")
     ap.add_argument("--jobs", type=int, default=1, help="render frames in N processes")
     a = ap.parse_args(argv)
 
