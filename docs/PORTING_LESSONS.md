@@ -279,3 +279,11 @@ Production runs may use XLA defaults (ulp-level differences only).
   bitwise identical to the 1-GPU run on every field after 24 steps; the sharded gradient agrees to 1.5e-11 (GPU
   gradient repeat floor ~4e-11). 4 GPUs are slower (0.43 vs 0.34 s/step): LLC90 (13 tiles) is too small to scale;
   the sequential cg2d sums dominate (sum_unroll not set in this run).
+
+## Task 19 — production configuration, Fortran-free (2026-09-23)
+- JAX from the pickup (init.state_from_pickup with the useCTRL=T control adjustments, geothermal flux) on one A100
+  (default XLA flags) vs the Fortran production run on 96 ranks (ref_ff_mpi96_1month): after 744 steps every global
+  %MON statistic agrees to <= 4e-13 relative (theta/salt mean and sd identical to all printed digits; worst over the
+  month 3.5e-9 in the near-zero wvel mean). No Fortran dump is used anywhere in this JAX run.
+- The theta minimum of -4.8 degC in the useCTRL=F runs is gone with the control adjustments (-2.08 degC): the optimised
+  IC adjustments matter physically, not just for the cost function.
