@@ -121,12 +121,13 @@
 ### Task 3: Stage ECCO v4r4 input data + namelist file-reference audit
 **Files:**
 - Create: `scripts/fetch_eccov4r4.py`, `scripts/audit_run_inputs.py`, `docs/DATA.md`
+- ➕ Created: `scripts/fetch_job.sbatch`, `scripts/extract_job.sbatch` (downloads/unpacking as `shared` jobs), `mitgcm_jax/io/{namelist,mds}.py` + `mitgcm_jax/tests/test_io_readers.py`
 - Create: `scripts/tests/test_data_manifest.py`
 
-- [ ] fetch from PO.DAAC (Python, `~/.netrc`) to `/work/.../MIT/data/eccov4r4/`: `native_grid_files`, `input_init`, flux-forced forcing (1992 first), **1992 adjusted forcing**, `input_forcing/other`, **`control_weights`**, smooth scale/norm files; `data_constraints` + profiles only if full V4r4 cannot run without ecco/profiles (decide in Task 4, keep useCAL semantics)
-- [ ] fetch PO.DAAC native-grid 1992-01-02T00 snapshot (11 steps) and 1992 monthly means
-- [ ] `audit_run_inputs.py`: parse every `data*` of a run directory, assert each referenced file exists, record sha256 (keep own copies)
-- [ ] write tests: manifest checksums; shapes (compact 90×1170, big-endian float32); audit fails on a missing planted file
+- [ ] ⏳ (small archives + products done; forcing archives downloading, jobs 27632235/6, unpack 27632252/3) fetch from PO.DAAC (Python, `~/.netrc`) to `/work/.../MIT/data/eccov4r4/`: `native_grid_files`, `input_init`, flux-forced forcing (1992 first), **1992 adjusted forcing**, `input_forcing/other`, **`control_weights`**, smooth scale/norm files; `data_constraints` + profiles only if full V4r4 cannot run without ecco/profiles (decide in Task 4, keep useCAL semantics)
+- [x] fetch PO.DAAC native-grid 1992-01-02T00 snapshot (11 steps) and 1992 monthly means
+- [x] `audit_run_inputs.py`: parse every `data*` of a run directory, assert each referenced file exists, record sha256 (keep own copies)
+- [x] write tests: manifest checksums; shapes (compact 90×1170, big-endian float32); audit fails on a missing planted file
 - [ ] run tests — must pass before Task 4
 
 ### Task 4: Fortran reference builds and baseline runs

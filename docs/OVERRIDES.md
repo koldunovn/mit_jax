@@ -77,6 +77,13 @@ Forward-relevant:
 4. The time-varying forcing controls (`xx_qnet … xx_spflx`, `flux-forced/namelist/data.ctrl:31–96`) are all
    zeros (adjustments are folded into the forcing files; `flux-forced/doc/README_fluxforced.md`), so they add 0.
 
+5. **Namelist:** ff `data` sets `temp_EvPrRn = 0.` (PARM01; unset in full V4r4) — the temperature assigned to
+   evaporation/precipitation/runoff with `useRealFreshWaterFlux=T`. Forward-relevant; port from the run's `data`.
+   Also ff `data.autodiff` has `useSALT_PLUMEinAdMode = .TRUE.` (full: `.FALSE.`): the two trees' ECCO-mode backward
+   semantics differ for salt plume (Task 17). ff `data.ctrl` sets every `mult_genarr*/mult_gentim2d = 0.` (cost
+   weights only). Other shared namelists (`data`, `data.gmredi`, `data.ggl90`, `data.salt_plume`, `data.cal`,
+   `data.exch2`, `eedata`, `data.smooth`) are identical in content (checked with `mitgcm_jax/io/namelist.py`).
+
 Not forward-relevant: `INCLUDE_PLOADBAR` (cost only), `BOXMEAN_COST_ONLY`, ECCO pickups for the steric reference
 (`ecco_read/write_pickup.F`, `ecco_init_varia.F`), gentim2d record offsets (`ctrl_init.F:917`,
 `ctrl_map_ini_gentim2d.F`, `ctrl_cost_gen.F`), TAF checkpoint levels (`tamc.h`: full 5/220/220, ff 25/100/100).

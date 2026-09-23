@@ -36,3 +36,21 @@ One entry per task, written in the same commit as the task. Cite `file:line`; st
 - The audit is a test: the inventory and CPP tables in `docs/OVERRIDES.md` are generated (`--update`) and compared
   byte-for-byte (`--check`); every changed file needs a hand-written classification row. Negative controls: planted
   new file, missing row, extra row, edited count, missing markers.
+
+## Task 3 — ECCO v4r4 data staging and input audit (2026-09-23, in progress: forcing archives downloading)
+
+- PO.DAAC publishes the V4r4 forcing only as two whole archives (192 GiB full, 92 GiB flux-forced); "fetch only 1992"
+  is impossible there. Download whole, keep as own copies, unpack selectively (`extract`: one streaming pass that
+  also writes a member index). ECCO Drive has per-file access but needs a separate WebDAV password.
+- Downloads belong in batch jobs, not on the login node: `shared` nodes have internet, a job survives logout, and a
+  `.part` file + HTTP Range makes a restart lose nothing (the flux-forced archive resumed at 9.9 GiB).
+  Rate is capped at ~25 MiB/s per connection; two archives in two jobs run at ~25 MiB/s each.
+- Python on Levante: the mambaforge base CA bundle is broken (same failure as curl); use `/etc/ssl/certs/ca-bundle.crt`.
+- A namelist-derived input list needs code knowledge, not just key names: the T/S atlases in PARM05 are read only
+  when `nIter0=0` (`ini_fields.F:30`) and are not in `input_init`; EXF yearly files carry `_YYYY`; ctrl files carry
+  the optimcycle; smooth builds its file names in code. The audit cites the code for each rule and prints any
+  file-like key without a rule as UNRESOLVED instead of dropping it.
+- V4r4 namelists end groups three ways (`/`, `&`, `&end`); the first parser version silently returned empty groups
+  for `&`-terminated files. Cross-check: parsed key count equals the count of `key =` lines in every file.
+- Namelist diff between the trees found a forward difference the code audit could not: ff `data` sets
+  `temp_EvPrRn = 0.` (added to docs/OVERRIDES.md), and ff `data.autodiff` keeps salt plume in the adjoint.
