@@ -147,3 +147,14 @@ Production runs may use XLA defaults (ulp-level differences only).
 - Jitting the function returned by `jax.vjp` captures residuals as constants (3 GB): jit a function that calls vjp.
 - Right after an edit on the login node, compute nodes may still see stale files (home FS cache): checksum inside srun
   before trusting a surprising failure.
+
+## Task 13 — GM/Redi (2026-09-23, sub-agent)
+- Bitwise on both oracles (P05 tensor, P06 exchange, T01 residual flow, T13 kappaRk via GMREDI_CALC_DIFF).
+- stableGmAdjTap hard-codes its limits: tensor slope <= 2e-3 (gmredi_slope_limit.F:593), bolus 5*min(|S|,1e-4)
+  (gmredi_slope_psi.F:377): data.gmredi GM_maxSlope/GM_Scrit/GM_Sd/GM_slopeSqCutoff have no effect, taper factors 1.
+  With GM_skewflx=0 kapGM reaches only GM_PsiX/Y. CTRL's ALLOW_KAPGM/KAPREDI_CONTROL takes GM_isopycK/GM_background_K
+  out of the tensor (3-D kapGM/kapRedi instead).
+- "Eager bitwise, jit not" = an XLA rewrite: dump the compiled HLO and grep rsqrt/divide. A/sqrt(B) -> A*rsqrt(B)
+  happened only where the sqrt had one user (same code exact in one loop, 1 ulp off in another).
+- Inputs missing from a stage can be rebuilt bitwise when they are pointwise maps of dumped fields
+  (recip_hFacW = where(maskW, 1/hFacW, 0), update_r_star.F:76-79).
