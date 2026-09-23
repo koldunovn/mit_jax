@@ -53,12 +53,14 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("outdir")
     ap.add_argument("--rundir", required=True)
-    ap.add_argument("--init-oracle", required=True)
+    ap.add_argument("--init-oracle")
     ap.add_argument("--init-it", type=int, default=1)
     ap.add_argument("--nsteps", type=int, required=True)
     ap.add_argument("--frame-every", type=int, default=6)
     ap.add_argument("--monitor-every", type=int, default=1)
     ap.add_argument("--snapshot-every", type=int, default=24)
+    ap.add_argument("--restart", help="state_final.npz of a previous run_jax run (continues its iteration count)")
+    ap.add_argument("--frame-offset", type=int, default=0, help="number of the first frame file written")
     a = ap.parse_args(argv)
     out = Path(a.outdir)
     out.mkdir(parents=True, exist_ok=False)
@@ -77,13 +79,23 @@ def main(argv=None):
     t0 = time.time()
     P, g, ex, kLowC = setup(rundir)
     L = g.layout
-    ds = oracle.dumpset(a.init_oracle)
-    st = state_from_dump(ds, a.init_it)
-    st = st.add(runoff=np.asarray(exf_mod.exf_init_varia(P.exf, L)["runoff"]))
-    st = State({k: jax.numpy.asarray(v) for k, v in st.f.items()}, jax.numpy.asarray(a.init_it))
-    say(f"setup + initial state {time.time() - t0:.1f} s")
     loader = exf_mod.ExfRecordLoader(P.exf, g, rundir)
     nIter0 = int(nml.get("data", "parm03", "nIter0", default=0))
+    if a.restart:
+        z = np.load(a.restart)
+        a.init_it = int(z["it"])
+        st = State({k: jax.numpy.asarray(z[k]) for k in z.files if k != "it"}, jax.numpy.asarray(a.init_it))
+        # the EXF record buffers of the Fortran run are those of a run started at nIter0: replay the host-side record
+        # logic for the steps before the restart (reads only the records it needs, no model work)
+        for it in range(nIter0, a.init_it):
+            loader.load(*exf_mod.model_time(nml, it - nIter0 + 1))
+        say(f"restart from {a.restart} at it={a.init_it}")
+    else:
+        ds = oracle.dumpset(a.init_oracle)
+        st = state_from_dump(ds, a.init_it)
+        st = st.add(runoff=np.asarray(exf_mod.exf_init_varia(P.exf, L)["runoff"]))
+        st = State({k: jax.numpy.asarray(v) for k, v in st.f.items()}, jax.numpy.asarray(a.init_it))
+    say(f"setup + initial state {time.time() - t0:.1f} s")
     step = jax.jit(lambda P, g, kLowC, st, exf_in: forward_step(P, g, ex, kLowC, st, exf_in)[0])
     mon = open(out / "monitor.txt", "w")
 
@@ -97,9 +109,11 @@ def main(argv=None):
 
     # myTime of the state at the start of iteration it: startTime + (it - nIter0)*deltaT
     t_state = exf_mod.model_time(nml, a.init_it - nIter0 + 1)[0]
-    frame(0, st, t_state)
-    mon.write(format_dynstat(dynstat(st, g, L), a.init_it) + "\n")
-    nframe = 1
+    nframe = a.frame_offset
+    if not a.restart:
+        frame(nframe, st, t_state)
+        mon.write(format_dynstat(dynstat(st, g, L), a.init_it) + "\n")
+        nframe += 1
     tstep = []
     for n in range(a.nsteps):
         it = a.init_it + n
