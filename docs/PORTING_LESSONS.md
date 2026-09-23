@@ -287,3 +287,16 @@ Production runs may use XLA defaults (ulp-level differences only).
   month 3.5e-9 in the near-zero wvel mean). No Fortran dump is used anywhere in this JAX run.
 - The theta minimum of -4.8 degC in the useCTRL=F runs is gone with the control adjustments (-2.08 degC): the optimised
   IC adjustments matter physically, not just for the cost function.
+
+## Task 19 — budgets and means (2026-09-23, sub-agent)
+- Under r* the State's hFacC is one step behind its theta: content = rA*drF*h0FacC*rStarFacC*theta (wrong pairing:
+  4e-2 relative error in heat).
+- With temp_EvPrRn = salt_EvPrRn = 0 the EmPmR*theta_surf terms of continuity/advection cancel exactly against
+  PmEpR*(EvPrRn - tracer) (external_forcing_surf.F:122-132, 257-277) — they are 10 % of Qnet: a budget that includes
+  them looks almost right and is wrong. Shortwave telescopes to swfrac(0)=1 (nothing leaves the floor); the salt
+  plume is a pure redistribution.
+- Closure measured in round-off floors (eps x quadrature sum of cell contents): volume <= 5.4, SSH 0.8, heat 37,
+  salt 7.7 over 48 LLC90 steps; the Fortran's own steps (from dumps, no JAX) <= 3.5. Negative controls fail by >= 1e4
+  floors, incl. model-side ones (geothermal x(1+1e-5); EvPrRn unset).
+- My run_jax snapshots had the tile axis in the wrong place for 3-D fields (tiles_to_compact wants tiles at -3) — the
+  budgets agent found it; fixed with the compact() helper.

@@ -330,9 +330,9 @@ compare outputs), so no task waits for a later package; full-step gates start in
 - Create: `scripts/runs/fluxforced_{1month,1year}.sbatch`, `mitgcm_jax/diagnostics/{monitor,budgets,means}.py`, `tools/compare_runs.py`, `mitgcm_jax/tests/test_step_fluxforced.py`
 
 - [x] all substeps at steps 1–3 pass full-step dump gates (teacher-forced where threshold-sensitive)
-- [ ] monitor, SSH/heat/salt budgets, means in the scan carry
+- [x] monitor, SSH/heat/salt budgets, means in the scan carry — diagnostics/{monitor,budgets,means}.py; run_jax --budgets/--means-every
 - [ ] 1-month (GPU) vs Fortran; 1-year vs Fortran within the Task 4 spread — ✅ 1 month: CPU bitwise (all 3-D fields at it 745), GPU %MON 1e-11 (useCTRL=F twin); 1-year Fortran production refs queued; JAX 1-year GPU run 1992 done (useCTRL=F, no geothermal) → production-config comparison after Task 8b
-- [ ] write tests: tier-1 3-step full-step gate; budget closure + negative control
+- [x] write tests: tier-1 3-step full-step gate; budget closure + negative control — test_step_fluxforced (2 free steps bitwise), test_budgets (tier1x), test_means
 - [ ] run tier1 + tier2 — must pass before Task 20
 
 ### Task 20: GPU sharding check
