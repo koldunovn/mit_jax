@@ -168,3 +168,13 @@ Production runs may use XLA defaults (ulp-level differences only).
   array shifted one level.
 - Replaying intermediate dumps localises errors: a 6e-14 T13 error was 1-ulp input differences (algsimp division
   rewrite) amplified by the implicit solve; the solver fed dumped inputs was bitwise.
+
+## Task 16a — DST3 multi-dimensional advection (2026-09-23, sub-agent)
+- Design decision (plan Task 16a): per-tile static tables + select. Every pass runs the X and Y blocks on all tiles;
+  tables carry each tile's update region (interiorOnly/overlapOnly bounds, edge flags) and the corner-fill gathers.
+  Per-facet order: f1 X,Y; f2 X, X-overlap, Y; f3 Y-overlap, X, Y; f4 Y,X; f5 Y, Y-overlap, X. Costs 6 DST3 flux
+  evaluations instead of 3, one code path, shards unchanged (P=4 == P=1 bitwise).
+- The LLC90 facet corners are land: dropping FILL_CS_CORNER_TR_RL changes no dumped value. Gated on an all-wet
+  synthetic case with constancy/conservation (with fills 7e-16 / 1e-18, without 3e-3 / 1e-8).
+- Under z* GAD_ADVECTION reads UPDATE_R_STAR's hFacW/S, recip_hFacC (not recip_hFacNew). Every shared face flux was
+  checked bitwise equal on both sides of every tile/facet edge (signed vector exchange of fluxes).
