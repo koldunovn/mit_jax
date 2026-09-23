@@ -325,3 +325,16 @@ Production runs may use XLA defaults (ulp-level differences only).
   state as jit arguments, one heavy stage per process. GPU account limit: 5 running jobs (not GPUs).
 - Open for Nikolay: adjsen box edge (script tests YC<=151 which is always true -> box to 180E); J scaling (literal
   adjsen divides by box volume twice); default science mode (exact is stable here); units-weighted screen norm.
+
+## M2.5 — sea-ice advection/diffusion + reg_ridge (2026-09-23, sub-agent)
+- SEAICE_ADVDIFF (DST3-FL, SEAICEadvScheme=33, flux form, HEFF/AREA/HSNOW) and SEAICE_REG_RIDGE bitwise vs
+  full_jaxdump_v5 at it 1-3, halos included (A01-A06, I02, I03 incl. all 7 TICES levels); P=4 == P=1.
+- SEAICE_ADVECTION is an older variant of GAD_ADVECTION (interiorOnly only in pass 1, different fill conditions): the
+  pass tables differ only in each facet's last pass, so reusing GAD's table leaves the STATE unchanged — only
+  halo-inclusive gates on the A-stage diagnostics catch it. Facet-edge logic can also leave the oracle state unchanged
+  (LLC90 facet corners are land): an all-wet synthetic conservation test (9e-18 vs 3e-7 without the corner fills)
+  proves the logic matters.
+- JAX's division JVP forms b**-2, which underflows for |b| < 1e-154 -> 0*inf = NaN backward. Real sea-ice states
+  hold values like HSNOW = -1.2e-240: the limiter ratio uses a quotient-rule custom_jvp (forward = the same IEEE
+  division). Stacked fields share the uTrans cotangent, so one NaN lane poisons every field's gradient.
+- At limiter kinks JAX splits the derivative 0.5/0.5 — a convention, not TAF's value (relevant for M3).
