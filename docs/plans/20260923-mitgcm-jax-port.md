@@ -310,11 +310,11 @@ compare outputs), so no task waits for a later package; full-step gates start in
 **Files:**
 - Create: `docs/ADJOINT_MODES.md`, `mitgcm_jax/adjoint/modes.py`, `mitgcm_jax/tests/test_adjoint_modes.py`
 
-- [ ] determine TAF semantics from c66g code (`pkg/autodiff/autodiff_inadmode_set_ad.F:37–53` flips useGGL90/useSALT_PLUME/useSEAICE=F and sets viscFacAdj=viscFacInAd for the whole reverse sweep incl. recomputation; what is STOREd vs recomputed) — document
-- [ ] `AdjointConfig` per package (ecco/exact/off); if "off in reverse" ≠ "frozen coefficients", provide both variants
-- [ ] `viscFacInAd` as `custom_vjp` (backward = VJP of viscous kernel at visc×factor)
-- [ ] write tests: every mode forward byte-identical; factor=1 bitwise == exact gradient; factor=2 differs; effect tests on live fixtures
-- [ ] run tests — must pass before Task 18
+- [x] determine TAF semantics from c66g code (`pkg/autodiff/autodiff_inadmode_set_ad.F:37–53` flips useGGL90/useSALT_PLUME/useSEAICE=F and sets viscFacAdj=viscFacInAd for the whole reverse sweep incl. recomputation; what is STOREd vs recomputed) — document — docs/ADJOINT_MODES.md
+- [x] `AdjointConfig` per package (ecco/exact/off); if "off in reverse" ≠ "frozen coefficients", provide both variants — adjoint/modes.py; frozen == off-in-reverse for GGL90 (STORE placement)
+- [x] `viscFacInAd` as `custom_vjp` (backward = VJP of viscous kernel at visc×factor) — implemented as custom_jvp (forward mode kept)
+- [x] write tests: every mode forward byte-identical; factor=1 bitwise == exact gradient; factor=2 differs; effect tests on live fixtures — test_adjoint_modes(_grad).py
+- [x] run tests — must pass before Task 18
 
 ### Task 18: Checkpointing and gradient drivers
 **Files:**

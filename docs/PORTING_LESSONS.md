@@ -205,3 +205,15 @@ Production runs may use XLA defaults (ulp-level differences only).
 - INI_CG2D writes pW/pS/pC halos that UPDATE_CG2D never rewrites: only a halo-inclusive gate finds such init state.
 - MDSIO reads = fill interior, then exchange: pickup-field halos are 0 (TKE: GGL90TKEmin*maskC) where exch2 does not
   write. mom_StartAB = nIter0 (=1) with the V4r4 pickup: AB2 weights at step 1.
+
+## Task 17 — backward-mode semantics (2026-09-23, sub-agent)
+- "Package off in the adjoint" is decided by where the TAF STOREs sit, not by the flag: kappaRk / kappaRU/RV are
+  stored after the GGL90 terms, so TAF's ecco adjoint uses the FORWARD Kv/Av in the implicit solves = frozen
+  coefficients = stop_gradient on the GGL90 outputs (not "recomputed without GGL90"). ZERO_ADJ_LOC(sigma) also cuts
+  GGL90's N^2 derivative (ggl90_calc.F:218-219) — the source of a 97.6 K/K single-point spike in the exact gradient.
+- Backward-only changes: custom_jvp "value at args, tangent at alt" (viscFacInAd) keeps forward and reverse mode and is
+  bitwise plain AD when alt == args. Exact mode is proven identical by jaxpr-text equality with HEAD (2 s per trace).
+- Choose the cost function per seam: a one-step theta cost is blind to salt plume and cg2d; test each seam on the
+  routine that feeds it and look for exact structural zeros.
+- Open for Nikolay: add a "recomputed without GGL90" variant?; TAF-like cg2d adjoint tolerance (~1e-7 vs 1e-13) for the
+  M3 comparison?; salt-plume adjoint semantics differ between the ff and full trees.
