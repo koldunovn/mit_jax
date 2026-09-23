@@ -21,16 +21,21 @@ C66G = REPO / "MITgcm_c66g"
 V4 = REPO / "ECCO-v4-Configurations" / "ECCOv4 Release 4"
 TREES = {"full": V4 / "code", "ff": V4 / "flux-forced" / "code"}
 C66G_PATH = {f: f"model/src/{f}" for f in ("forward_step.F", "do_oceanic_phys.F", "dynamics.F", "thermodynamics.F",
-                                           "solve_for_pressure.F")}
+                                           "solve_for_pressure.F", "temp_integrate.F", "salt_integrate.F")}
 
 # (file, anchor, occurrence, expected total, stage, dump statements, scope, what the substep does)
 # dump statements: 'S:<groups>' -> JAXDUMP_STATE(stage, groups, bi0, bj0);  'T:<name>:<kind>:<nz>' -> JAXDUMP_TILE of a
-# routine-local array of the current tile; 'G:<name>:<kind>:<nz>' -> JAXDUMP_LOCAL of a routine-local all-tile array.
+# routine-local array of the current tile; 'G:<name>:<kind>:<nz>' -> JAXDUMP_LOCAL of a routine-local all-tile array;
+# 'K:<name>:<kind>[:<expr>]' -> JAXDUMP_TILEK of the 2-D level k (loop variable k) of the current tile inside a k loop,
+# field <name>_k<kkk>; <expr> (default <name>) is the array element the 2-D slice starts at.
 # scope 'all' dumps every tile (bi0=0), 'tile' only the current bi,bj (inside a tile loop).
 # An anchor starting with 'BEFORE:' inserts before the statement (to catch a routine's inputs), else after it.
 FS, OP, DY, TH, SP = "forward_step.F", "do_oceanic_phys.F", "dynamics.F", "thermodynamics.F", "solve_for_pressure.F"
+TI, SI = "temp_integrate.F", "salt_integrate.F"
 STAGES = [
     (FS, r"CALL AUTODIFF_INADMODE_UNSET\(", 1, 1, "S00_begin", ["S:dtarfmkgpxc"], "all", "state at the start of the step"),
+    (FS, r"CALL AUTODIFF_INADMODE_UNSET\(", 1, 1, "G00_geometry", ["S:GVRX"], "all",
+     "grid, masks, 3-D mixing parameters, packed vertical grid, extra r* fields, exch2 exchange probe"),
     (FS, r"CALL UPDATE_R_STAR\(\s*\.FALSE\.", 1, 1, "S01_update_rstar_F", ["S:rd"], "all",
      "RESET_NLFS_VARS + UPDATE_R_STAR(.FALSE.) (every step: ALLOW_AUTODIFF)"),
     (FS, r"CALL LOAD_FIELDS_DRIVER\(", 1, 1, "S02_load_fields", ["S:xfp"], "all", "EXF read, time interpolation, map"),
@@ -45,6 +50,12 @@ STAGES = [
     (OP, r"CALL GMREDI_CALC_TENSOR\(", 1, 1, "P05_gmredi_tensor", ["S:g"], "tile", "GM/Redi slopes, taper, tensor"),
     (OP, r"CALL GMREDI_DO_EXCH\(", 1, 1, "P06_gmredi_exch", ["S:g"], "all", "GM/Redi tensor halo exchange"),
     (FS, r"CALL DO_OCEANIC_PHYS\(", 1, 1, "S04_oceanic_phys", ["S:fmkgprt"], "all", "all of DO_OCEANIC_PHYS"),
+    (DY, r"CALL CALC_PHI_HYD\(", 1, 1, "D00a_phi_hyd",
+     ["K:dPhiHydX:W", "K:dPhiHydY:S", "K:phiHydC:C", "K:phiHydF:C"], "tile",
+     "hydrostatic pressure (per level k): gradient terms dPhiHydX/Y, phiHydC, phiHydF (next interface)"),
+    (DY, r"CALL MOM_VECINV\(", 1, 1, "D00b_mom_vecinv",
+     ["K:gU:W:gU(1-OLx,1-OLy,k,bi,bj)", "K:gV:S:gV(1-OLx,1-OLy,k,bi,bj)", "K:guDissip:W", "K:gvDissip:S"], "tile",
+     "vector-invariant momentum tendency of level k (gU, gV) and dissipation kept out of AB (guDissip, gvDissip)"),
     (DY, r"BEFORE:CALL IMPLDIFF\(", 1, 4, "D01_before_impl_visc", ["S:a", "T:kappaRU:W:Nr+1", "T:kappaRV:S:Nr+1"],
      "tile", "explicit gU, gV (after TIMESTEP) and vertical viscosities, input of IMPLDIFF (ALLOW_AUTODIFF path)"),
     (DY, r"CALL IMPLDIFF\(", 2, 4, "D02_after_impl_visc", ["S:a"], "tile", "gU, gV after implicit viscosity"),
@@ -63,7 +74,21 @@ STAGES = [
      "exchanges before the staggered tracer step"),
     (TH, r"CALL GMREDI_RESIDUAL_FLOW\(", 1, 1, "T01_residual_flow", ["T:uFld:W:Nr", "T:vFld:S:Nr", "T:wFld:C:Nr"],
      "tile", "Eulerian + bolus velocity used by tracer advection"),
+    (TI, r"CALL GAD_ADVECTION\(", 1, 1, "T10_temp_adv", ["T:gT_loc:C:Nr"], "tile",
+     "theta: multi-dimensional DST3 advective tendency"),
+    (TI, r"BEFORE:CALL TIMESTEP_TRACER\(", 1, 1, "T11_temp_gT", ["T:gT_loc:C:Nr"], "tile",
+     "theta: total explicit tendency after forcing, diffusion, AB3 and r* rescale"),
+    (TI, r"CALL TIMESTEP_TRACER\(", 1, 1, "T12_temp_step", ["T:gT_loc:C:Nr"], "tile", "theta: T + dt*gT"),
+    (TI, r"CALL GAD_IMPLICIT_R\(", 1, 1, "T13_temp_impl", ["T:gT_loc:C:Nr", "T:kappaRk:C:Nr", "T:recip_hFac:C:Nr"],
+     "tile", "theta after implicit vertical advection + diffusion (and its inputs kappaRk, recip_hFac)"),
     (TH, r"CALL TEMP_INTEGRATE\(", 1, 1, "T02_temp_integrate", ["S:ta"], "tile", "theta advanced (AB3, implicit)"),
+    (SI, r"CALL GAD_ADVECTION\(", 1, 1, "T20_salt_adv", ["T:gS_loc:C:Nr"], "tile",
+     "salt: multi-dimensional DST3 advective tendency"),
+    (SI, r"BEFORE:CALL TIMESTEP_TRACER\(", 1, 1, "T21_salt_gS", ["T:gS_loc:C:Nr"], "tile",
+     "salt: total explicit tendency after forcing, diffusion, AB3 and r* rescale"),
+    (SI, r"CALL TIMESTEP_TRACER\(", 1, 1, "T22_salt_step", ["T:gS_loc:C:Nr"], "tile", "salt: S + dt*gS"),
+    (SI, r"CALL GAD_IMPLICIT_R\(", 1, 1, "T23_salt_impl", ["T:gS_loc:C:Nr", "T:kappaRk:C:Nr", "T:recip_hFac:C:Nr"],
+     "tile", "salt after implicit vertical advection + diffusion (and its inputs)"),
     (TH, r"CALL SALT_INTEGRATE\(", 1, 1, "T03_salt_integrate", ["S:ta"], "tile", "salt advanced (AB3, implicit)"),
     (FS, r"CALL THERMODYNAMICS\(", 2, 2, "S13_thermodynamics", ["S:ta"], "all",
      "GM residual flow, DST3 advection, diffusion, AB3 on theta/salt, implicit vertical"),
@@ -76,7 +101,8 @@ _CONT = re.compile(r"^     [^ 0]")
 
 # forward_step.F advances the counter right after DYNAMICS (myIter = nIter0 + iLoop, forward_step.F:823 in c66g
 # and both overrides): stages after that point pass myIter-1 so every record of one step carries the step's START iteration.
-AFTER_ITER_UPDATE = {"C01_cg2d_inputs", "C02_cg2d_solution", "T01_residual_flow", "T02_temp_integrate",
+AFTER_ITER_UPDATE = {"T10_temp_adv", "T11_temp_gT", "T12_temp_step", "T13_temp_impl", "T20_salt_adv", "T21_salt_gS",
+                     "T22_salt_step", "T23_salt_impl", "C01_cg2d_inputs", "C02_cg2d_solution", "T01_residual_flow", "T02_temp_integrate",
                      "T03_salt_integrate", "S06_update_rstar_T", "S07_update_cg2d", "S08_solve_for_pressure", "S09_momentum_correction",
                      "S10_integr_continuity", "S11_calc_rstar", "S12_stagger_exchanges", "S13_thermodynamics",
                      "S14_tracers_correction"}
@@ -95,6 +121,12 @@ def _calls(stage, dumps, scope):
             name, pk, nz = rest.split(":")
             out += [f"      CALL JAXDUMP_TILE( '{stage}', '{name}', '{pk}',",
                     f"     &                   {name}, {nz}, bi, bj, {it}, myThid )"]
+        elif kind == "K":
+            parts = rest.split(":", 2)
+            name, pk = parts[0], parts[1]
+            expr = parts[2] if len(parts) > 2 else name
+            out += [f"      CALL JAXDUMP_TILEK( '{stage}', '{name}', '{pk}',",
+                    f"     &   {expr}, k, bi, bj, {it}, myThid )"]
         else:  # G
             name, pk, nz = rest.split(":")
             out += [f"      CALL JAXDUMP_LOCAL( '{stage}', '{name}', '{pk}',",

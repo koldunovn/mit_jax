@@ -207,6 +207,10 @@ C       g GM/Redi   Kwx Kwy Kwz Kux Kvy Kuz Kvz GM_PsiX GM_PsiY
 C       p salt plume saltPlumeDepth, saltPlumeFlux
 C       c cg2d      aW2d, aS2d, aC2d (operator), pW, pS, pC (preconditioner)
 C       x EXF       ustress, vstress, hflux, swflux, sflux, saltflx, apressure (+ spflx with READIN_SALT_PLUME_FLUX)
+C       G geometry  grid metrics, masks, Coriolis, angles, 3-D masks and mixing parameters (JAXDUMP_GEOM)
+C       V vertical  1-D vertical grid packed into one 2-D record of tile 1 (JAXDUMP_GEOM)
+C       R r* extra  rStarFacNm1, rStarExp, rStarDh*Dt, h0Fac, etaHnm1, hFac_surf, Bo_surf (JAXDUMP_GEOM)
+C       X exchange  probe of every exch2 exchange type on index-coded fields (JAXDUMP_EXCH_PROBE)
       SUBROUTINE JAXDUMP_STATE( stage, groups, bi0, bj0, myIter,
      &   myThid )
       IMPLICIT NONE
@@ -242,6 +246,11 @@ C       x EXF       ustress, vstress, hflux, swflux, sflux, saltflx, apressure (
       IF ( .NOT. JAXDUMP_ACTIVE( myIter, myThid ) ) RETURN
       jd_seq = jd_seq + 1
 
+      IF ( INDEX(groups,'G') .GT. 0 .OR. INDEX(groups,'V') .GT. 0
+     &     .OR. INDEX(groups,'R') .GT. 0 )
+     &  CALL JAXDUMP_GEOM( stage, groups, bi0, bj0, myIter, myThid )
+      IF ( INDEX(groups,'X') .GT. 0 )
+     &  CALL JAXDUMP_EXCH_PROBE( stage, myIter, myThid )
       IF ( INDEX(groups,'d') .GT. 0 ) THEN
        CALL JAXDUMP_FLD(stage,'uVel','W',uVel,Nr,bi0,bj0,myIter,myThid)
        CALL JAXDUMP_FLD(stage,'vVel','S',vVel,Nr,bi0,bj0,myIter,myThid)
@@ -448,5 +457,347 @@ C     Dump a routine-local array shaped like a global field (all tiles), e.g. cg
       jd_seq = jd_seq + 1
       CALL JAXDUMP_FLD( stage, fname, kind, arr, nz, 0, 0,
      &                  myIter, myThid )
+      RETURN
+      END
+
+C---------------------------------------------------------------------------------------------------------------------
+C     Dump a 2-D slice of level k of a routine-local array inside a k loop; field name <fname>_k<kkk> (nz = 1).
+      SUBROUTINE JAXDUMP_TILEK( stage, fname, kind, arr, k,
+     &                          bi, bj, myIter, myThid )
+      IMPLICIT NONE
+#include "SIZE.h"
+#include "JAXDUMP.h"
+      CHARACTER*(*) stage, fname, kind
+      INTEGER k, bi, bj, myIter, myThid
+      _RL arr(1-OLx:sNx+OLx,1-OLy:sNy+OLy)
+      LOGICAL JAXDUMP_ACTIVE
+      EXTERNAL JAXDUMP_ACTIVE
+      INTEGER ILNBLNK
+      EXTERNAL ILNBLNK
+      CHARACTER*32 kname
+      IF ( .NOT. JAXDUMP_ACTIVE( myIter, myThid ) ) RETURN
+      jd_seq = jd_seq + 1
+      WRITE(kname,'(2A,I3.3)') fname(1:ILNBLNK(fname)), '_k', k
+      CALL JAXDUMP_WRITE( stage, kname, kind, arr, 1,
+     &                    bi, bj, myIter, myThid )
+      RETURN
+      END
+
+C---------------------------------------------------------------------------------------------------------------------
+C     Geometry (G), packed vertical grid (V) and extra r* fields (R). Called from JAXDUMP_STATE (already active).
+      SUBROUTINE JAXDUMP_GEOM( stage, groups, bi0, bj0, myIter,
+     &                         myThid )
+      IMPLICIT NONE
+#include "SIZE.h"
+#include "EEPARAMS.h"
+#include "PARAMS.h"
+#include "GRID.h"
+#include "DYNVARS.h"
+#include "SURFACE.h"
+#ifdef ALLOW_CTRL
+# include "CTRL_OPTIONS.h"
+# include "CTRL_FIELDS.h"
+#endif
+#ifdef ALLOW_MOM_COMMON
+# include "MOM_COMMON_OPTIONS.h"
+# include "MOM_VISC.h"
+#endif
+      CHARACTER*(*) stage, groups
+      INTEGER bi0, bj0, myIter, myThid
+      _RL vbuf(1-OLx:sNx+OLx,1-OLy:sNy+OLy,1,nSx,nSy)
+      INTEGER i, j, bi, bj
+
+      IF ( INDEX(groups,'G') .GT. 0 ) THEN
+       CALL JAXDUMP_FLD(stage,'xC','C',xC,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'yC','C',yC,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'xG','Z',xG,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'yG','Z',yG,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'dxC','W',dxC,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'dyC','S',dyC,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'dxF','C',dxF,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'dyF','C',dyF,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'dxG','S',dxG,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'dyG','W',dyG,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'dxV','Z',dxV,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'dyU','Z',dyU,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'rA','C',rA,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'rAw','W',rAw,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'rAs','S',rAs,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'rAz','Z',rAz,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'recip_dxC','W',recip_dxC,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'recip_dyC','S',recip_dyC,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'recip_dxF','C',recip_dxF,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'recip_dyF','C',recip_dyF,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'recip_dxG','S',recip_dxG,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'recip_dyG','W',recip_dyG,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'recip_dxV','Z',recip_dxV,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'recip_dyU','Z',recip_dyU,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'recip_rA','C',recip_rA,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'recip_rAw','W',recip_rAw,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'recip_rAs','S',recip_rAs,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'recip_rAz','Z',recip_rAz,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'R_low','C',R_low,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'rLowW','W',rLowW,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'rLowS','S',rLowS,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'Ro_surf','C',Ro_surf,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'rSurfW','W',rSurfW,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'rSurfS','S',rSurfS,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'recip_Rcol','C',recip_Rcol,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'maskInC','C',maskInC,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'maskInW','W',maskInW,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'maskInS','S',maskInS,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'angleCosC','C',angleCosC,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'angleSinC','C',angleSinC,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'u2zonDir','W',u2zonDir,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'v2zonDir','S',v2zonDir,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'fCori','C',fCori,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'fCoriG','Z',fCoriG,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'fCoriCos','C',fCoriCos,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'tanPhiAtU','W',tanPhiAtU,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'tanPhiAtV','S',tanPhiAtV,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'maskC','C',maskC,Nr,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'maskW','W',maskW,Nr,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'maskS','S',maskS,Nr,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'recip_hFacW','W',recip_hFacW,Nr,
+     &                  bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'recip_hFacS','S',recip_hFacS,Nr,
+     &                  bi0,bj0,myIter,myThid)
+#ifdef ALLOW_3D_DIFFKR
+       CALL JAXDUMP_FLD(stage,'diffKr','C',diffKr,Nr,bi0,bj0,myIter,
+     &                  myThid)
+#endif
+#ifdef ALLOW_KAPGM_CONTROL
+       CALL JAXDUMP_FLD(stage,'kapGM','C',kapGM,Nr,bi0,bj0,myIter,
+     &                  myThid)
+#endif
+#ifdef ALLOW_KAPREDI_CONTROL
+       CALL JAXDUMP_FLD(stage,'kapRedi','C',kapRedi,Nr,bi0,bj0,myIter,
+     &                  myThid)
+#endif
+#ifdef ALLOW_3D_VISCA4
+       CALL JAXDUMP_FLD(stage,'viscA4Dfld','C',viscA4Dfld,Nr,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'viscA4Zfld','Z',viscA4Zfld,Nr,bi0,bj0,
+     &                  myIter,myThid)
+#endif
+#ifdef ALLOW_3D_VISCAH
+       CALL JAXDUMP_FLD(stage,'viscAhDfld','C',viscAhDfld,Nr,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'viscAhZfld','Z',viscAhZfld,Nr,bi0,bj0,
+     &                  myIter,myThid)
+#endif
+      ENDIF
+
+      IF ( INDEX(groups,'V') .GT. 0 ) THEN
+C      rows (j) of tile 1: 1 drF, 2 drC, 3 rC, 4 rF, 5 recip_drF, 6 recip_drC, 7 tRef, 8 sRef,
+C      9 rVel2wUnit, 10 wUnit2rVel, 11 rhoFacC, 12 rhoFacF, 13 dBdrRef, 14 phiRef(1:Nr+1), 15 phiRef(Nr+2:2Nr+1)
+       DO bj = 1, nSy
+        DO bi = 1, nSx
+         DO j = 1-OLy, sNy+OLy
+          DO i = 1-OLx, sNx+OLx
+           vbuf(i,j,1,bi,bj) = 0. _d 0
+          ENDDO
+         ENDDO
+        ENDDO
+       ENDDO
+       DO i = 1, Nr
+        vbuf(i, 1,1,1,1) = drF(i)
+        vbuf(i, 3,1,1,1) = rC(i)
+        vbuf(i, 5,1,1,1) = recip_drF(i)
+        vbuf(i, 7,1,1,1) = tRef(i)
+        vbuf(i, 8,1,1,1) = sRef(i)
+        vbuf(i,11,1,1,1) = rhoFacC(i)
+        vbuf(i,13,1,1,1) = dBdrRef(i)
+        vbuf(i,15,1,1,1) = phiRef(Nr+1+i)
+       ENDDO
+       DO i = 1, Nr+1
+        vbuf(i, 2,1,1,1) = drC(i)
+        vbuf(i, 4,1,1,1) = rF(i)
+        vbuf(i, 6,1,1,1) = recip_drC(i)
+        vbuf(i, 9,1,1,1) = rVel2wUnit(i)
+        vbuf(i,10,1,1,1) = wUnit2rVel(i)
+        vbuf(i,12,1,1,1) = rhoFacF(i)
+        vbuf(i,14,1,1,1) = phiRef(i)
+       ENDDO
+       CALL JAXDUMP_FLD(stage,'vertical','V',vbuf,1,1,1,myIter,myThid)
+      ENDIF
+
+#ifdef NONLIN_FRSURF
+      IF ( INDEX(groups,'R') .GT. 0 ) THEN
+       CALL JAXDUMP_FLD(stage,'rStarFacNm1C','C',rStarFacNm1C,1,
+     &                  bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'rStarFacNm1W','W',rStarFacNm1W,1,
+     &                  bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'rStarFacNm1S','S',rStarFacNm1S,1,
+     &                  bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'rStarExpC','C',rStarExpC,1,
+     &                  bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'rStarExpW','W',rStarExpW,1,
+     &                  bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'rStarExpS','S',rStarExpS,1,
+     &                  bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'rStarDhCDt','C',rStarDhCDt,1,
+     &                  bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'rStarDhWDt','W',rStarDhWDt,1,
+     &                  bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'rStarDhSDt','S',rStarDhSDt,1,
+     &                  bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'pStarFacK','C',pStarFacK,1,
+     &                  bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'h0FacC','C',h0FacC,Nr,
+     &                  bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'h0FacW','W',h0FacW,Nr,
+     &                  bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'h0FacS','S',h0FacS,Nr,
+     &                  bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'etaHnm1','C',etaHnm1,1,
+     &                  bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'hFac_surfC','C',hFac_surfC,1,
+     &                  bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'hFac_surfW','W',hFac_surfW,1,
+     &                  bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'hFac_surfS','S',hFac_surfS,1,
+     &                  bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'Bo_surf','C',Bo_surf,1,
+     &                  bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'recip_Bo','C',recip_Bo,1,
+     &                  bi0,bj0,myIter,myThid)
+      ENDIF
+#endif
+      RETURN
+      END
+
+C---------------------------------------------------------------------------------------------------------------------
+C     Exchange probe: fill tile interiors with exact codes, halos with 0, run each exch2 exchange type used by the
+C     model, dump the results with halos. code(u-like) = 1e6 + tile*1e4 + j*100 + i, code(v-like) = 2e6 + ...;
+C     a negative halo value = sign flip, 0 = not filled. Arrays live in a local common (large).
+      SUBROUTINE JAXDUMP_EXCH_PROBE( stage, myIter, myThid )
+      IMPLICIT NONE
+#include "SIZE.h"
+#include "EEPARAMS.h"
+#ifdef ALLOW_EXCH2
+# include "W2_EXCH2_SIZE.h"
+# include "W2_EXCH2_TOPOLOGY.h"
+#endif
+      CHARACTER*(*) stage
+      INTEGER myIter, myThid
+      COMMON /JAXDUMP_PROBE/ pu, pv
+      _RL pu(1-OLx:sNx+OLx,1-OLy:sNy+OLy,1,nSx,nSy)
+      _RL pv(1-OLx:sNx+OLx,1-OLy:sNy+OLy,1,nSx,nSy)
+      INTEGER m
+
+      DO m = 1, 12
+       CALL JAXDUMP_PROBE_FILL( pu, pv, myThid )
+       IF ( m .EQ. 1 ) THEN
+        CALL EXCH_XY_RL( pu, myThid )
+        CALL JAXDUMP_FLD(stage,'xT','C',pu,1,0,0,myIter,myThid)
+       ELSEIF ( m .EQ. 2 ) THEN
+        CALL EXCH_UV_XY_RL( pu, pv, .TRUE., myThid )
+        CALL JAXDUMP_FLD(stage,'xUVs_u','W',pu,1,0,0,myIter,myThid)
+        CALL JAXDUMP_FLD(stage,'xUVs_v','S',pv,1,0,0,myIter,myThid)
+       ELSEIF ( m .EQ. 3 ) THEN
+        CALL EXCH_UV_XY_RL( pu, pv, .FALSE., myThid )
+        CALL JAXDUMP_FLD(stage,'xUVn_u','W',pu,1,0,0,myIter,myThid)
+        CALL JAXDUMP_FLD(stage,'xUVn_v','S',pv,1,0,0,myIter,myThid)
+       ELSEIF ( m .EQ. 4 ) THEN
+        CALL EXCH_Z_3D_RL( pu, 1, myThid )
+        CALL JAXDUMP_FLD(stage,'xZ','Z',pu,1,0,0,myIter,myThid)
+       ELSEIF ( m .EQ. 5 ) THEN
+        CALL EXCH_UV_AGRID_3D_RL( pu, pv, .TRUE., 1, myThid )
+        CALL JAXDUMP_FLD(stage,'xAs_u','C',pu,1,0,0,myIter,myThid)
+        CALL JAXDUMP_FLD(stage,'xAs_v','C',pv,1,0,0,myIter,myThid)
+       ELSEIF ( m .EQ. 6 ) THEN
+        CALL EXCH_UV_AGRID_3D_RL( pu, pv, .FALSE., 1, myThid )
+        CALL JAXDUMP_FLD(stage,'xAn_u','C',pu,1,0,0,myIter,myThid)
+        CALL JAXDUMP_FLD(stage,'xAn_v','C',pv,1,0,0,myIter,myThid)
+       ELSEIF ( m .EQ. 7 ) THEN
+        CALL EXCH_UV_BGRID_3D_RL( pu, pv, .TRUE., 1, myThid )
+        CALL JAXDUMP_FLD(stage,'xBs_u','Z',pu,1,0,0,myIter,myThid)
+        CALL JAXDUMP_FLD(stage,'xBs_v','Z',pv,1,0,0,myIter,myThid)
+       ELSEIF ( m .EQ. 8 ) THEN
+        CALL EXCH_UV_BGRID_3D_RL( pu, pv, .FALSE., 1, myThid )
+        CALL JAXDUMP_FLD(stage,'xBn_u','Z',pu,1,0,0,myIter,myThid)
+        CALL JAXDUMP_FLD(stage,'xBn_v','Z',pv,1,0,0,myIter,myThid)
+       ELSEIF ( m .EQ. 9 ) THEN
+C       EXCH_S3D_RL works on (0:sNx+1,0:sNy+1) arrays (halo 1): not probed here
+        CALL EXCH_3D_RL( pu, 1, myThid )
+        CALL JAXDUMP_FLD(stage,'x3D','C',pu,1,0,0,myIter,myThid)
+       ELSEIF ( m .EQ. 10 ) THEN
+        CALL EXCH_SM_3D_RL( pu, .TRUE., 1, myThid )
+        CALL JAXDUMP_FLD(stage,'xSMs','C',pu,1,0,0,myIter,myThid)
+       ELSEIF ( m .EQ. 11 ) THEN
+        CALL EXCH_UV_DGRID_3D_RL( pu, pv, .TRUE., 1, myThid )
+        CALL JAXDUMP_FLD(stage,'xDs_u','S',pu,1,0,0,myIter,myThid)
+        CALL JAXDUMP_FLD(stage,'xDs_v','W',pv,1,0,0,myIter,myThid)
+       ELSEIF ( m .EQ. 12 ) THEN
+        CALL EXCH_UV_3D_RL( pu, pv, .TRUE., 1, myThid )
+        CALL JAXDUMP_FLD(stage,'xUV3s_u','W',pu,1,0,0,myIter,myThid)
+        CALL JAXDUMP_FLD(stage,'xUV3s_v','S',pv,1,0,0,myIter,myThid)
+       ENDIF
+      ENDDO
+      RETURN
+      END
+
+      SUBROUTINE JAXDUMP_PROBE_FILL( pu, pv, myThid )
+      IMPLICIT NONE
+#include "SIZE.h"
+#include "EEPARAMS.h"
+#ifdef ALLOW_EXCH2
+# include "W2_EXCH2_SIZE.h"
+# include "W2_EXCH2_TOPOLOGY.h"
+#endif
+      INTEGER myThid
+      _RL pu(1-OLx:sNx+OLx,1-OLy:sNy+OLy,1,nSx,nSy)
+      _RL pv(1-OLx:sNx+OLx,1-OLy:sNy+OLy,1,nSx,nSy)
+      INTEGER i, j, bi, bj, tile
+      DO bj = 1, nSy
+       DO bi = 1, nSx
+#ifdef ALLOW_EXCH2
+        tile = W2_myTileList(bi,bj)
+#else
+        tile = bi + (bj-1)*nSx
+#endif
+        DO j = 1-OLy, sNy+OLy
+         DO i = 1-OLx, sNx+OLx
+          pu(i,j,1,bi,bj) = 0. _d 0
+          pv(i,j,1,bi,bj) = 0. _d 0
+          IF ( i.GE.1 .AND. i.LE.sNx .AND. j.GE.1 .AND. j.LE.sNy ) THEN
+           pu(i,j,1,bi,bj) = 1000000 + tile*10000 + j*100 + i
+           pv(i,j,1,bi,bj) = 2000000 + tile*10000 + j*100 + i
+          ENDIF
+         ENDDO
+        ENDDO
+       ENDDO
+      ENDDO
       RETURN
       END
