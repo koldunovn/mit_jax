@@ -93,13 +93,15 @@
 **Files:**
 - Create: `~/MIT/.gitignore`, `pyproject.toml`, `constraints.txt`, `mitgcm_jax/__init__.py`, `docs/PORTING_LESSONS.md`, `docs/ENV.md`, `CLAUDE.md`, `scripts/run_tier1.sbatch`
 - Create: `mitgcm_jax/tests/test_env.py`, `mitgcm_jax/tests/test_manifest.py`
+- ➕ Created: `conftest.py` (4 fake devices, manifest markers, per-module cache clear), `mitgcm_jax/tests/manifest.py`
+  (cost groups), `scripts/check_pytest_report.py` + `scripts/tests/test_check_pytest_report.py` (runner verdict + negative controls)
 
 - [x] `git init ~/MIT`; `.gitignore` excludes clones (`MITgcm_c66g/`, `ECCO*/`, `verification_other*`), `work`, handoffs, data
-- [ ] env `mitgcm-jax` pinned to fesom-jax known-good set; versions in `docs/ENV.md`
-- [ ] `CLAUDE.md` with project rules (literal port, file:line, namelist/OPTIONS over defaults, AD rules, storage, no deletes, no login-node runs)
-- [ ] `run_tier1.sbatch` (compute node, unique OUT_DIR, non-zero exit if any test fails — checked by parsing the pytest summary, not only the exit code)
-- [ ] write tests: x64/float64 jit; manifest (every test file in a cost group); fake devices = 4
-- [ ] run tier1 on a compute node — must pass before Task 2
+- [x] env `mitgcm-jax` pinned to fesom-jax known-good set; versions in `docs/ENV.md`
+- [x] `CLAUDE.md` with project rules (literal port, file:line, namelist/OPTIONS over defaults, AD rules, storage, no deletes, no login-node runs)
+- [x] `run_tier1.sbatch` (compute node, unique OUT_DIR, non-zero exit if any test fails — checked by parsing the pytest summary, not only the exit code)
+- [x] write tests: x64/float64 jit; manifest (every test file in a cost group); fake devices = 4
+- [x] run tier1 on a compute node — must pass before Task 2 (job 27631874: 9 passed, 44 s)
 
 ### Task 2: Audit the two override trees
 **Files:**

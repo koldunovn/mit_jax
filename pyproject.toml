@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mitgcm-jax"
+version = "0.0.1"
+description = "Differentiable, parallel MITgcm (checkpoint66g, ECCO v4r4 / LLC90) in JAX"
+requires-python = ">=3.12"
+authors = [{ name = "Nikolay Koldunov", email = "koldunovn@gmail.com" }]
+# Floors only; the exact set is constraints.txt (docs/ENV.md).
+dependencies = [
+    "jax>=0.10.1",
+    "numpy>=2.0",
+    "scipy>=1.14",
+    "netCDF4>=1.7",      # PO.DAAC ECCO v4r4 native-grid products (Task 3)
+]
+
+[project.optional-dependencies]
+# GPU: CUDA 12 + cuDNN as pip wheels, no system CUDA module on Levante.
+cuda = ["jax[cuda12]>=0.10.1"]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+include = ["mitgcm_jax*"]
+
+[tool.pytest.ini_options]
+testpaths = ["mitgcm_jax/tests", "scripts/tests"]
+addopts = "-p no:cacheprovider"
+markers = [
+    "smoke: seconds-scale checks, safe to run locally (`pytest -m smoke`)",
+    "tier1: fast suite (<10 min on one CPU compute node, every commit)",
+    "tier2: GPU suite (~1 h, nightly/milestone)",
+    "tier3: milestone climate twins",
+]
