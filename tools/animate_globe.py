@@ -33,24 +33,8 @@ def frames_from_fortran(rundir, out, prefix="T", level=0):
         np.savez(out / f"frame_{i:05d}.npz", sst=np.asarray(a)[level], iter=it, date=f"iter {it}")
 
 
-def main(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("frames")
-    ap.add_argument("mesh")
-    ap.add_argument("out")
-    ap.add_argument("--var", default="sst")
-    ap.add_argument("--vmin", type=float, default=-2.0)
-    ap.add_argument("--vmax", type=float, default=30.0)
-    ap.add_argument("--cmap", default="RdYlBu_r")
-    ap.add_argument("--lat0", type=float, default=20.0)
-    ap.add_argument("--lon0", type=float, default=-30.0)
-    ap.add_argument("--spin", type=float, default=360.0)
-    ap.add_argument("--fps", type=int, default=12)
-    ap.add_argument("--resolution", type=float, default=0.5)
-    ap.add_argument("--label", default="MITgcm (JAX port), ECCO v4r4 LLC90")
-    ap.add_argument("--units", default="°C")
-    a = ap.parse_args(argv)
-
+def _render(a, files, idx, png):
+    """Render frames files[i] for i in idx to png/<i>.png (one process; the regrid interpolator is reused)."""
     import cartopy.crs as ccrs
     import matplotlib
 
@@ -61,15 +45,10 @@ def main(argv=None):
     mesh = nr.mitgcm.load_mesh(a.mesh, mask_land=True)
     lon, lat = mesh["lon"].values, mesh["lat"].values
     land = mesh["land_mask"].values
-    files = sorted(Path(a.frames).glob("frame_*.npz"))
-    if not files:
-        raise SystemExit(f"no frames in {a.frames}")
-    png = Path(a.out) / "png"
-    png.mkdir(parents=True, exist_ok=True)
     interp = None
     n = len(files)
-    for i, f in enumerate(files):
-        z = np.load(f)
+    for i in idx:
+        z = np.load(files[i])
         v = np.asarray(z[a.var], dtype=np.float64).ravel()
         v = np.where(land, np.nan, v)
         proj = ccrs.Orthographic(central_longitude=a.lon0 + a.spin * i / max(n - 1, 1), central_latitude=a.lat0)
@@ -89,7 +68,42 @@ def main(argv=None):
         fig.text(0.5, 0.925, str(z["date"]), ha="center", color="#c8d0e0", fontsize=11)
         fig.savefig(png / f"{i:05d}.png", facecolor=fig.get_facecolor())
         plt.close(fig)
-        print(f"frame {i + 1}/{n} {z['date']}", flush=True)
+        if i % 50 == 0:
+            print(f"frame {i + 1}/{n} {z['date']}", flush=True)
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("frames")
+    ap.add_argument("mesh")
+    ap.add_argument("out")
+    ap.add_argument("--var", default="sst")
+    ap.add_argument("--vmin", type=float, default=-2.0)
+    ap.add_argument("--vmax", type=float, default=30.0)
+    ap.add_argument("--cmap", default="RdYlBu_r")
+    ap.add_argument("--lat0", type=float, default=20.0)
+    ap.add_argument("--lon0", type=float, default=-30.0)
+    ap.add_argument("--spin", type=float, default=360.0)
+    ap.add_argument("--fps", type=int, default=12)
+    ap.add_argument("--resolution", type=float, default=0.5)
+    ap.add_argument("--label", default="MITgcm (JAX port), ECCO v4r4 LLC90")
+    ap.add_argument("--units", default="°C")
+    ap.add_argument("--jobs", type=int, default=1, help="render frames in N processes")
+    a = ap.parse_args(argv)
+
+    files = sorted(Path(a.frames).glob("frame_*.npz"))
+    if not files:
+        raise SystemExit(f"no frames in {a.frames}")
+    png = Path(a.out) / "png"
+    png.mkdir(parents=True, exist_ok=True)
+    n = len(files)
+    chunks = [list(range(k, n, a.jobs)) for k in range(a.jobs)]
+    if a.jobs == 1:
+        _render(a, files, chunks[0], png)
+    else:
+        import multiprocessing as mp
+        with mp.get_context("spawn").Pool(a.jobs) as pool:
+            pool.starmap(_render, [(a, files, c, png) for c in chunks])
     out = Path(a.out)
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-framerate", str(a.fps), "-i", str(png / "%05d.png"),
                     "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2", "-c:v", "libx264", "-pix_fmt", "yuv420p",
