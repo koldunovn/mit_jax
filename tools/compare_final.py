@@ -33,10 +33,10 @@ def main(argv=None):
         ref, _ = read_mds(p)
         ref = ref[0].astype(np.float32)
         a = np.asarray(z[key])[..., OL:OL + N, OL:OL + N]
-        a = tiles_to_compact(a).astype(np.float32).reshape(ref.shape)
+        a = tiles_to_compact(np.moveaxis(a, 0, -3)).astype(np.float32).reshape(ref.shape)
         wet = np.ones(ref.shape, bool)
         if hkey is not None:
-            h = tiles_to_compact(np.asarray(z[hkey])[..., OL:OL + N, OL:OL + N]).reshape(ref.shape)
+            h = tiles_to_compact(np.moveaxis(np.asarray(z[hkey])[..., OL:OL + N, OL:OL + N], 0, -3)).reshape(ref.shape)
             wet = h > 0
         d = np.abs(a.astype(np.float64) - ref.astype(np.float64))
         ndiff = int(np.count_nonzero(a != ref))
