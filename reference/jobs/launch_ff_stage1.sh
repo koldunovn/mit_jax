@@ -3,6 +3,8 @@
 #   1-day mpi96 twice (bitwise reproducibility), 1-day serial13 (tile-layout spread), 3-step jaxdump oracle,
 #   1-day gcov run (branch coverage -> docs/BRANCHES.md). Every run dir is new; make_rundir refuses missing inputs.
 set -euo pipefail
+# sbatch from inside a job inherits SLURM_MEM_PER_*; srun then refuses ("mutually exclusive"), 2026-09-23
+unset SLURM_MEM_PER_NODE SLURM_MEM_PER_CPU SLURM_MEM_PER_GPU
 cd /home/a/a270088/MIT
 PY=/work/ab0995/a270088/mambaforge/envs/mitgcm-jax/bin/python
 R=/work/ab0995/a270088/MIT/reference/runs

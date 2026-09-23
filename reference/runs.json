@@ -11,5 +11,9 @@
   "smoke_full_restart_from2": "smoke_full_restart_B_from2",
   "smoke_ff_jaxdump_v3": "smoke_ff_v3_jd_2steps",
   "forced_ff_jaxdump_v3": "smoke_ff_v3_forced_jd_3steps",
-  "probe_exch_ff_v4": "probe_ff_v4_1step"
+  "probe_exch_ff_v4": "probe_ff_v4_1step",
+  "ref_ff_mpi96_1day_a": "ref_ff_mpi96_1day_a",
+  "ref_ff_mpi96_1day_b": "ref_ff_mpi96_1day_b",
+  "ref_ff_serial13_1day": "ref_ff_serial13_1day",
+  "ref_ff_jaxdump_v4": "ref_ff_serial13_jaxdump_3steps"
 }

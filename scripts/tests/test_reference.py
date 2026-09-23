@@ -62,3 +62,16 @@ def test_matched_restart_is_bitwise():
 def test_ff_reader_fix_changes_no_numbers():
     """The ff I6-reader deviation is I/O only: same output as the pre-fix binary on the same run."""
     assert all(_same_bytes(run("smoke_ff_serial13_prefix_fix"), run("smoke_ff_serial13"), 3).values())
+
+
+def test_ff_stage1_twin_bitwise_and_spread():
+    """Flux-forced stage 1 (plan Task 4): two 1-day 96-rank runs of the same binary are bitwise identical; the
+    13-tile serial run differs from them only by summation order (recorded 2026-09-23: U 7e-9, V 1.1e-8,
+    W 6e-8, PH 1.4e-9 relative after 24 steps; dynstat %MON <= 7e-8, wvel mean)."""
+    a, b, s = run("ref_ff_mpi96_1day_a"), run("ref_ff_mpi96_1day_b"), run("ref_ff_serial13_1day")
+    assert all(_same_bytes(a, b, 25).values())
+    ma, ms = read_monitor(a / "STDOUT.0000"), read_monitor(s / "STDOUT.0000")
+    diffs, only = compare_monitors(ma, ms)
+    assert set(only) <= SERIAL_ONLY_MISSING
+    dyn = {k: v for k, v in diffs.items() if k.startswith("dynstat_")}
+    assert 0 < max(dyn.values()) < 1e-6, max(dyn.values())
