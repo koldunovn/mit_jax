@@ -67,7 +67,9 @@ DESIGN DECISION (AD; docs/PORTING_RULES.md "never differentiate through solver i
     cycles (no data-dependent stopping), left-preconditioned with P = omega (D - omega L)^-1 = one line-SOR sweep from
     zero, i.e. the Fortran sweep in operator form (x_{k+1} = SOR(x_k) is exactly x_k + P(b - A x_k)). The transpose
     solve (reverse mode) is the same GMRES on A^T with M = P^T, both from jax.linear_transpose. Inner products are tile
-    partial sums in tile order (P-independent). The plain stationary iteration converges too slowly for this
+    partial sums in tile order (P-independent). On the CPU the Krylov basis is stored window by window
+    (_gmres_windowed: the same arithmetic in the same order as the model-layout form _gmres_natural, bitwise equal,
+    faster; other platforms run _gmres_natural). The plain stationary iteration converges too slowly for this
     (measured at LLC90: ~415 sweeps per decade of residual). Nothing differentiates through the iterations; the first
     guess carries no derivative; the stopping rule, counts and relaxation switch carry none.
   - Consequence: the derivative is that of the exactly solved linear system. The Fortran iterate stops at
@@ -629,11 +631,13 @@ def _stationary(apply_A, apply_P, b, n_iter):
     return lax.fori_loop(0, n_iter, step, (jnp.zeros_like(b[0]), jnp.zeros_like(b[1])))
 
 
-def _gmres(apply_A, apply_M, b, restart, cycles, gsum):
+def _gmres_natural(apply_A, apply_M, b, restart, cycles, gsum):
     """Left-preconditioned restarted GMRES(restart) with a FIXED number of cycles (no convergence test): solves
     A x = b through min ||M(b - A x)||. x = (xu, xv) interior-only arrays [T, ny, nx]. Inner products are per-tile
     partial sums added in tile order (gsum = Exchanger.global_sum_tile: P-independent). Classical Gram-Schmidt applied
-    twice; a zero Krylov vector (exact convergence) is kept at zero instead of dividing by 0."""
+    twice; a zero Krylov vector (exact convergence) is kept at zero instead of dividing by 0.
+    The Krylov basis is stored in the model layout [m+1, T, ny, nx]; the non-CPU form of _gmres (the implementation of
+    commit ef3ea4e, unchanged; _gmres_windowed is the same arithmetic, faster on the CPU)."""
     def dot_many(Vs, w):  # Vs: pytree with leading basis axis [k, T, ...]; w: [T, ...] -> [k]
         part = sum(jnp.sum(Va * wa[None], axis=(-2, -1)) for Va, wa in zip(Vs, w))  # [k, T]
         return gsum(part.T)
@@ -682,6 +686,189 @@ def _gmres(apply_A, apply_M, b, restart, cycles, gsum):
     return lax.fori_loop(0, cycles, cycle, (jnp.zeros_like(b[0]), jnp.zeros_like(b[1])))
 
 
+# XLA:CPU reduction order of jnp.sum(a, axis=(-2, -1)) on [..., ny, nx] model arrays (jax 0.10.1, gate flags; read
+# from the optimized HLO and the LLVM IR of the kernels, --xla_dump_to):
+#   1. the tree-reduction rewriter turns a reduction over dimensions longer than XLA_REDUCE_WINDOW into a
+#      reduce-window of XLA_REDUCE_WINDOW x XLA_REDUCE_WINDOW windows on the array padded to a multiple of the window
+#      ((padded - n) // 2 in front): for ny = nx = 98 windows of rows/columns 0-16, 17-48, 49-80, 81-97;
+#   2. each window is summed from 0.0 in row-major order, one scalar add at a time (the in-bounds tests keep LLVM from
+#      vectorising it);
+#   3. the 4 x 4 window sums are reduced from 0.0 by a loop LLVM vectorises with 2 lanes over the window rows: lane 0
+#      = 0.0 + rows 0 and 2 (each row's 4 windows in order), lane 1 = -0.0 + rows 1 and 3, result lane 0 + lane 1.
+# _win_dots reproduces exactly this order (bitwise) with a basis stored window by window, so that the products are
+# never materialised and the sums vectorise across windows; skipped halo points only drop exact zeros (x + 0 = x in a
+# sum that starts from +0). tensordot over the basis axis (the GEMV emitter) adds the rows in order: _win_axpy.
+XLA_REDUCE_WINDOW = 32
+
+
+def _window_plan(shape, L):
+    """Static description of the window layout of a [T, ny, nx] interior-only field: per axis the interior index
+    range of each reduce window (item 1 above), the windows grouped by length ("classes"); the four class arrays hold
+    [Ly, Lx, (basis,) 2 (u, v), T, windows of that length along y, along x]."""
+    T, ny, nx = shape
+    J, I = _interior(L)
+
+    def windows(n, lo, hi):
+        win = XLA_REDUCE_WINDOW
+        if n <= win:
+            raise NotImplementedError(f"_gmres_windowed: extent {n} <= {win} is not tree-reduced by XLA")
+        padded = -(-n // win) * win
+        low = (padded - n) // 2
+        return tuple((max(k * win - low, lo), min((k + 1) * win - low, hi)) for k in range(padded // win))
+
+    wy, wx = windows(ny, J.start, J.stop), windows(nx, I.start, I.stop)
+    if len(wy) != 4 or len(wx) != 4 or any(b <= a for a, b in wy + wx):
+        raise NotImplementedError(f"_gmres_windowed: window structure {wy} x {wx} (item 3 verified for 4 x 4)")
+    cls_y = {n: tuple(k for k, (a, b) in enumerate(wy) if b - a == n) for n in sorted({b - a for a, b in wy})}
+    cls_x = {n: tuple(k for k, (a, b) in enumerate(wx) if b - a == n) for n in sorted({b - a for a, b in wx})}
+    return dict(shape=shape, wy=wy, wx=wx, cls_y=cls_y, cls_x=cls_x)
+
+
+def _to_win(plan, x):
+    """(xu, xv) [T, ny, nx] -> {(Ly, Lx): [Ly, Lx, 2, T, nwy, nwx]} (interior values; halos dropped)."""
+    a = jnp.stack(x)  # [2, T, ny, nx]
+    out = {}
+    for Ly, bys in plan["cls_y"].items():
+        for Lx, bxs in plan["cls_x"].items():
+            blk = jnp.stack([jnp.stack([a[:, :, slice(*plan["wy"][by]), slice(*plan["wx"][bx])] for bx in bxs], -1)
+                             for by in bys], -2)  # [2, T, Ly, Lx, nwy, nwx]
+            out[(Ly, Lx)] = jnp.transpose(blk, (2, 3, 0, 1, 4, 5))
+    return out
+
+
+def _from_win(plan, xc, dtype):
+    """Inverse of _to_win: (xu, xv) [T, ny, nx] with +0 halos."""
+    a = jnp.zeros((2,) + plan["shape"], dtype)
+    for (Ly, Lx), blk in xc.items():
+        blk = jnp.transpose(blk, (2, 3, 0, 1, 4, 5))
+        for iy, by in enumerate(plan["cls_y"][Ly]):
+            for ix, bx in enumerate(plan["cls_x"][Lx]):
+                a = a.at[:, :, slice(*plan["wy"][by]), slice(*plan["wx"][bx])].set(blk[..., iy, ix])
+    return a[0], a[1]
+
+
+def _win_dots(plan, Vc, wc, n):
+    """Per-component, per-tile inner products of basis rows 0..n-1 with w: Vc {cls: [Ly, Lx, K, 2, T, nwy, nwx]}, wc
+    {cls: [Ly, Lx, 2, T, nwy, nwx]} -> [n, 2, T], bitwise jnp.sum(V[k, c] * w[c], axis=(-2, -1)) of the model layout
+    (the order above). Window sums: a loop over window rows, each row's points added in order (unrolled)."""
+    acc = {c: jnp.zeros_like(V[0, 0, :n]) for c, V in Vc.items()}  # +0, typed like V (shard_map varying)
+    lo = 0
+    for hi in plan["cls_y"]:  # rows lo..hi-1 exist in every class with Ly >= hi
+        def row(oy, acc, cl=tuple(c for c in Vc if c[0] >= hi)):
+            acc = dict(acc)
+            for c in cl:  # one dynamic slice per point (a whole-row slice would be materialised by XLA)
+                a = acc[c]
+                for ox in range(c[1]):
+                    Vt = lax.dynamic_index_in_dim(Vc[c][:, ox, :n], oy, 0, keepdims=False)  # [n, 2, T, nwy, nwx]
+                    wt = lax.dynamic_index_in_dim(wc[c][:, ox], oy, 0, keepdims=False)
+                    a = a + Vt * wt[None]
+                acc[c] = a
+            return acc
+
+        acc = lax.fori_loop(lo, hi, row, acc)
+        lo = hi
+    shape = next(iter(acc.values())).shape[:3]
+    lanes = [jnp.zeros(shape, acc[next(iter(acc))].dtype), jnp.full(shape, -0.0, acc[next(iter(acc))].dtype)]
+    for by, (ya, yb) in enumerate(plan["wy"]):
+        for bx, (xa, xb) in enumerate(plan["wx"]):
+            c = (yb - ya, xb - xa)
+            lanes[by % 2] = lanes[by % 2] + acc[c][..., plan["cls_y"][c[0]].index(by), plan["cls_x"][c[1]].index(bx)]
+    return lanes[0] + lanes[1]
+
+
+def _win_axpy(coef, Vc, n):
+    """sum_{k < n} coef[k] * V[k], rows added in order from +0 (the GEMV of jnp.tensordot over the basis axis; the
+    rows it skips beyond n are zero rows with zero coefficients)."""
+    out = {}
+    for c, V in Vc.items():
+        acc = jnp.zeros(V.shape[:2] + V.shape[3:], V.dtype)
+        for k in range(n):
+            acc = acc + coef[k] * V[:, :, k]
+        out[c] = acc
+    return out
+
+
+GMRES_ROW_BLOCK = 8  # Arnoldi step j orthogonalises against basis rows 0 .. 8*(j//8)+7 (lax.switch over 5 sizes)
+
+
+def _gmres_windowed(apply_A, apply_M, b, restart, cycles, gsum, L, row_block=GMRES_ROW_BLOCK):
+    """_gmres_natural with the Krylov basis stored window by window (_window_plan): the same operations on the same
+    values in the same order, bitwise equal on the CPU (tests/test_seaice_gmres_bitwise*.py), several times faster:
+    the dot products are no longer formed as [m+1, T, ny, nx] product arrays reduced by a scalar reduce-window, and
+    Arnoldi step j works on the first row_block*(j//row_block+1) basis rows only (0 = all m+1 rows): the rows k > j
+    are zero with zero coefficients, their products +0 and the sums start from +0, so leaving them out changes no
+    bit."""
+    plan = _window_plan(b[0].shape, L)
+    dt = b[0].dtype
+    m = restart
+
+    def dot_many(Vc, wc, n):
+        s = _win_dots(plan, Vc, wc, n)  # [n, 2, T]
+        part = sum(s[:, i] for i in range(2))  # [k, T]
+        return gsum(part.T)
+
+    def dot(ac, cc):
+        s = _win_dots(plan, {c: a[:, :, None] for c, a in ac.items()}, cc, 1)[0]  # [2, T]
+        part = sum(s[i] for i in range(2))  # [T]
+        return gsum(part)
+
+    def scale(ac, s):
+        return {c: a * s for c, a in ac.items()}
+
+    def safe_normalize(wc):
+        nrm = jnp.sqrt(dot(wc, wc))
+        ok = nrm > 0.0
+        return scale(wc, jnp.where(ok, 1.0 / jnp.where(ok, nrm, 1.0), 0.0)), nrm
+
+    def cycle(_, x):
+        Ax = apply_A(x)
+        r0 = apply_M((b[0] - Ax[0], b[1] - Ax[1]))
+        v0, beta = safe_normalize(_to_win(plan, r0))
+        V = {c: jnp.zeros(a.shape[:2] + (m + 1,) + a.shape[2:], a.dtype).at[:, :, 0].set(a) for c, a in v0.items()}
+        H = jnp.zeros((m + 1, m), dt)
+
+        def arnoldi(j, carry):
+            V, H = carry
+            vj = _from_win(plan, {c: Vc[:, :, j] for c, Vc in V.items()}, dt)
+            w = _to_win(plan, apply_M(apply_A(vj)))
+
+            def cgs(n):  # one classical Gram-Schmidt pass against basis rows 0 .. n-1 (n > j)
+                def f(V, carry):  # V is indexed row by row inside the kernels (a sliced copy would be materialised)
+                    w, hs = carry
+                    act = (jnp.arange(n) <= j).astype(dt)
+                    h = dot_many(V, w, n) * act
+                    t = _win_axpy(h, V, n)
+                    # rows n..m: h = +0 as in _gmres_natural (zero rows times act); hs = h1 + h2 in two passes
+                    return {c: w[c] - t[c] for c in w}, hs + jnp.zeros((m + 1,), dt).at[:n].set(h)
+                return f
+
+            sizes = [min(row_block * (i + 1), m + 1) for i in range(-(-m // row_block))] if row_block else [m + 1]
+            branches = [cgs(n) for n in sizes]
+            # CGS2: the pass twice (second = re-orthogonalisation); the switch picks the smallest row count > j
+            w, h = lax.fori_loop(0, 2, lambda _, carry: lax.switch(j // row_block if row_block else 0, branches, V,
+                                                                   carry), (w, jnp.zeros((m + 1,), dt)))
+            w, nrm = safe_normalize(w)
+            H = H.at[:, j].set(h.at[j + 1].set(nrm))
+            V = {c: V[c].at[:, :, j + 1].set(w[c]) for c in V}
+            return V, H
+
+        V, H = lax.fori_loop(0, m, arnoldi, (V, H))
+        e1 = jnp.zeros((m + 1,), H.dtype).at[0].set(beta)
+        y = jnp.linalg.lstsq(H, e1)[0]
+        upd = _from_win(plan, _win_axpy(y, V, m), dt)
+        return tuple(xa + ua for xa, ua in zip(x, upd))
+
+    return lax.fori_loop(0, cycles, cycle, (jnp.zeros_like(b[0]), jnp.zeros_like(b[1])))
+
+
+def _gmres(apply_A, apply_M, b, restart, cycles, gsum, L):
+    """GMRES of the implicit derivative: _gmres_windowed on the CPU, _gmres_natural on other platforms
+    (lax.platform_dependent at lowering; the same arithmetic, the windowed basis reproduces the CPU reduction order)."""
+    win = partial(_gmres_windowed, apply_A, apply_M, restart=restart, cycles=cycles, gsum=gsum, L=L)
+    nat = partial(_gmres_natural, apply_A, apply_M, restart=restart, cycles=cycles, gsum=gsum)
+    return lax.platform_dependent(b, cpu=win, default=nat)
+
+
 @partial(jax.custom_jvp, nondiff_argnums=(0,))
 def _lsor_implicit(static, dyn, co, u0, v0):
     p, ex, max_iter, lsr_error = _join_static(static, dyn)
@@ -708,11 +895,11 @@ def _lsor_implicit_jvp(static, primals, tangents):
     gsum = ex.global_sum_tile
 
     def solve(matvec, b):
-        return _gmres(matvec, P, b, m, cycles, gsum)
+        return _gmres(matvec, P, b, m, cycles, gsum, L)
 
     def transpose_solve(vecmat, b):
         PT = jax.linear_transpose(P, b)
-        return _gmres(vecmat, lambda r: PT(r)[0], b, m, cycles, gsum)
+        return _gmres(vecmat, lambda r: PT(r)[0], b, m, cycles, gsum, L)
 
     dx = lax.custom_linear_solve(A, rhs, solve, transpose_solve)
     du, dv = _embed_exchange(ex, dx[0], dx[1], inner)

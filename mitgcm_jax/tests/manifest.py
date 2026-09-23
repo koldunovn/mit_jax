@@ -79,6 +79,8 @@ MANIFEST = {
     "mitgcm_jax/tests/test_seaice_adjoint_window.py": "nightly",
     "mitgcm_jax/tests/test_seaice_lsr_pallas.py": "tier1x",
     "mitgcm_jax/tests/test_seaice_lsr_gpu.py": "tier2",
+    "mitgcm_jax/tests/test_seaice_gmres_bitwise.py": "tier1x",
+    "mitgcm_jax/tests/test_seaice_gmres_bitwise_full.py": "nightly",
 }
 
 # Directories searched for test files (must match pyproject testpaths).
