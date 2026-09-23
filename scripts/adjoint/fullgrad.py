@@ -543,7 +543,7 @@ def action_tl(E, mode, out, log):
     names = a.tl_dirs.split(",") if a.tl_dirs else list(dirs)
     for n in names:
         d = {k: jnp.asarray(dirs[n][k]) for k in th}
-        for amp in ((1.0, 1e-6) if n == "combined" else (1.0,)):
+        for amp in (tuple(float(v) for v in a.tl_amps.split(",")) if n == "combined" else (1.0,)):
             t = time.time()
             J0, dJ = tl(th, jax.tree.map(lambda v: v * amp, d), E.fm0, E.st0, xs_d)
             dJ = float(dJ) / amp
@@ -620,6 +620,7 @@ def main(argv=None):
     ap.add_argument("--fd-repeats", type=int, default=2)
     ap.add_argument("--fd-parts", action="store_true", help="fd: also record J_ice at the base point")
     ap.add_argument("--tl-dirs", default="", help="tl: comma list of directions (default all + combined)")
+    ap.add_argument("--tl-amps", default="1,1e-6", help="tl: amplitudes of the combined direction")
     ap.add_argument("--grad-from", default="", help="tl: adjoint gradient npz (default grad_<mode>_<days>d_r0.npz)")
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args(argv)
