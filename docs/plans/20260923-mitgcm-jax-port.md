@@ -193,7 +193,7 @@ compare outputs), so no task waits for a later package; full-step gates start in
 
 - [x] pytrees; every prognostic incl. AB3 histories (θ/S **fields** for tracers, `doAB_onGtGs=F`; gU/gV for momentum) and cg2d warm start is a leaf — State (dict pytree); tracers have no AB in V4r4 (DST3)
 - [x] Config from run-dir namelists (`data`, `data.pkg`, `data.cal`, `data.exf`, `data.gmredi`, `data.ggl90`, `data.salt_plume`, `data.autodiff`, `data.exch2`, `eedata`) + CPP options from the build; each field records its source; unsupported option ⇒ hard error — per-package params_pytree dataclasses, hard errors on unported options (model.setup)
-- [ ] pickup reader: read `.meta` field list of `pickup.0000000001`; port `tempStartAB`/`momStartAB` logic literally (`pickupStrictlyMatch=F`)
+- [x] pickup reader: read `.meta` field list of `pickup.0000000001`; port `tempStartAB`/`momStartAB` logic literally (`pickupStrictlyMatch=F`) — init.py state_from_pickup bitwise (Task 8 agent)
 - [x] `forward_step` skeleton with SUBSTEPS order; `lax.scan` integrate (step 1 eager); same path for P=1 and P=N; always-on range checks — forward_step.py bitwise; Python loop over jitted step (scan later)
 - [ ] `ops/safe.py`: `safe_div`, `safe_sqrt`, `safe_pow` with finite gradients on masked lanes
 - [ ] compile-time canary (timeout) for the skeleton at P=4 on CPU
@@ -201,6 +201,12 @@ compare outputs), so no task waits for a later package; full-step gates start in
 - [ ] run tests — must pass before Task 9
 
 ➕ **2026-09-23: Tasks 6, 9–16b done by sub-agents, every kernel BITWISE equal to the Fortran on both oracles (gate XLA flags: `--xla_cpu_max_isa=AVX --xla_disable_hlo_passes=algsimp`, params as traced pytrees); ecco seams are noted per kernel for Task 17; P=4 gates wait for the sharded exchanger (Task 7) except GAD (P=4 == P=1 done).**
+
+### ➕ Task 8b: production control adjustments (useCTRL=T)
+**Files:** `mitgcm_jax/pkgs/{ctrl,smooth}.py`, `mitgcm_jax/tests/test_ctrl.py`
+- [ ] port CTRL_MAP_INI_GENARR (xx_* x weights, WC01 smoother pkg/smooth, CTRL_BOUND) applied at initialisation even
+  with mult=0 (found in Task 8: theta changes up to 8.7 K); forcing controls (xx_gentim2d) if they change values
+- [ ] gate: state_from_pickup(useCTRL=T) == ref_ff_jaxdump_v4 S00/G00 bitwise; one step == iteration 2
 
 ### Task 9: EXF flux-forced read path and surface forcing
 **Files:**
