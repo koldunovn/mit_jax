@@ -57,7 +57,7 @@ _GLOBAL_MAX_RL), WFAU := 0 if S1 grew since the last check, u converged if S1 < 
 exchange both components keep iterating (:657-660) until both converge at the same check. Reproduced literally in a
 `lax.while_loop` (the counts ICOUNT1/2 are a gate).
 
-DESIGN DECISION (AD; CLAUDE.md "never differentiate through solver iterations"): `lsor_solve` is a jax.custom_jvp.
+DESIGN DECISION (AD; docs/PORTING_RULES.md "never differentiate through solver iterations"): `lsor_solve` is a jax.custom_jvp.
   - Primal = the literal Fortran loop above (data-dependent count, bitwise with the oracle).
   - Tangent = implicit derivative of the linear system the LSOR iterates towards, A(c) x = b(c) (for the current
     Picard pass: A x = AU x(i-1) + BU x + CU x(i+1) - mask*(uRt1 x(j-1) + uRt2 x(j+1)) on the interior, halos of x from

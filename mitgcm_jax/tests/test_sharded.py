@@ -82,7 +82,7 @@ def untouched(maps, kind):
 
 # ------------------------------------------------------------------------------------------------ static checks
 def test_no_ragged_a2a_in_package():
-    """Banned collective (CLAUDE.md: its JAX transpose is wrong). No source file of the package may name it."""
+    """Banned collective (docs/PORTING_RULES.md: its JAX transpose is wrong). No source file of the package may name it."""
     token = "ragged_" + "all_to_all"
     hits = [str(p.relative_to(PKG)) for p in PKG.rglob("*.py") if token in p.read_text()]
     assert not hits, hits

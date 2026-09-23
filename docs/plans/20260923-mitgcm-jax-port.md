@@ -96,14 +96,14 @@
 
 ### Task 1: Repository skeleton and environment
 **Files:**
-- Create: `~/MIT/.gitignore`, `pyproject.toml`, `constraints.txt`, `mitgcm_jax/__init__.py`, `docs/PORTING_LESSONS.md`, `docs/ENV.md`, `CLAUDE.md`, `scripts/run_tier1.sbatch`
+- Create: `~/MIT/.gitignore`, `pyproject.toml`, `constraints.txt`, `mitgcm_jax/__init__.py`, `docs/PORTING_LESSONS.md`, `docs/ENV.md`, `docs/PORTING_RULES.md`, `scripts/run_tier1.sbatch`
 - Create: `mitgcm_jax/tests/test_env.py`, `mitgcm_jax/tests/test_manifest.py`
 - ➕ Created: `conftest.py` (4 fake devices, manifest markers, per-module cache clear), `mitgcm_jax/tests/manifest.py`
   (cost groups), `scripts/check_pytest_report.py` + `scripts/tests/test_check_pytest_report.py` (runner verdict + negative controls)
 
 - [x] `git init ~/MIT`; `.gitignore` excludes clones (`MITgcm_c66g/`, `ECCO*/`, `verification_other*`), `work`, handoffs, data
 - [x] env `mitgcm-jax` pinned to fesom-jax known-good set; versions in `docs/ENV.md`
-- [x] `CLAUDE.md` with project rules (literal port, file:line, namelist/OPTIONS over defaults, AD rules, storage, no deletes, no login-node runs)
+- [x] project rules (now `docs/PORTING_RULES.md`) (literal port, file:line, namelist/OPTIONS over defaults, AD rules, storage, no deletes, no login-node runs)
 - [x] `run_tier1.sbatch` (compute node, unique OUT_DIR, non-zero exit if any test fails — checked by parsing the pytest summary, not only the exit code)
 - [x] write tests: x64/float64 jit; manifest (every test file in a cost group); fake devices = 4
 - [x] run tier1 on a compute node — must pass before Task 2 (job 27631874: 9 passed, 44 s)
@@ -176,7 +176,7 @@
 - [x] write negative controls: dropped sign, wrong transpose, stale halo — each must fail
 - [x] run tests — tag `m0`
 
-➕ **2026-09-23 (session 3) execution note:** kernels of Tasks 6, 9–16b are ported in parallel by sub-agents, each
+➕ **2026-09-23 (session 3) execution note:** kernels of Tasks 6, 9–16b are ported in parallel, each
 gated by replay against the dump shim's stages (`docs/KERNEL_GUIDE.md`); oracles `smoke_ff_jaxdump_v3` (no forcing)
 and `forced_ff_jaxdump_v3` (flux forcing, useCTRL=F, no geothermal) with geometry, exchange probe and per-level
 momentum/tracer stages (`reference/jaxdump/SUBSTEPS.md`). Integration (Task 19 step) follows as kernels pass.
@@ -200,7 +200,7 @@ compare outputs), so no task waits for a later package; full-step gates start in
 - [x] write tests: config vs namelists/OPTIONS (code constants like Gibraltar ×10 are tested in their kernel task); pickup round-trip + AB weights at steps 1–3 vs dump; scan == loop bitwise; safe ops gradients; **standing full-field gradient gate** (grad w.r.t. whole θ,S,u,v,η finite everywhere, exactly zero on dry/halo/padding, nonzero wet) — rerun in every later task — config tests per package; pickup/AB weights (test_init, test_dynamics); scan==loop (test_checkpoint); standing gate test_fullfield_grad.py (tracers/eta zero on dry; dry velocities legitimately sensitive)
 - [x] run tests — must pass before Task 9
 
-➕ **2026-09-23: Tasks 6, 9–16b done by sub-agents, every kernel BITWISE equal to the Fortran on both oracles (gate XLA flags: `--xla_cpu_max_isa=AVX --xla_disable_hlo_passes=algsimp`, params as traced pytrees); ecco seams are noted per kernel for Task 17; P=4 gates wait for the sharded exchanger (Task 7) except GAD (P=4 == P=1 done).**
+➕ **2026-09-23: Tasks 6, 9–16b done, every kernel BITWISE equal to the Fortran on both oracles (gate XLA flags: `--xla_cpu_max_isa=AVX --xla_disable_hlo_passes=algsimp`, params as traced pytrees); ecco seams are noted per kernel for Task 17; P=4 gates wait for the sharded exchanger (Task 7) except GAD (P=4 == P=1 done).**
 
 ### ➕ Task 8b: production control adjustments (useCTRL=T)
 **Files:** `mitgcm_jax/pkgs/{ctrl,smooth}.py`, `mitgcm_jax/tests/test_ctrl.py`
@@ -438,7 +438,7 @@ parallel on the 4 GPUs of a node).
 - [ ] no `ragged_all_to_all`, no unbannered deviations (grep audit)
 
 ### Task 23: [Final] Update documentation
-- [ ] README.md, CLAUDE.md, PORTING_LESSONS.md, REFERENCE_RUNS.md, ADJOINT_RESULTS.md, ADJOINT_MODES.md
+- [ ] README.md, PORTING_RULES.md, PORTING_LESSONS.md, REFERENCE_RUNS.md, ADJOINT_RESULTS.md, ADJOINT_MODES.md
 - [ ] move this plan to `docs/plans/completed/`
 
 ## Technical Details
@@ -454,5 +454,5 @@ parallel on the 4 GPUs of a node).
 
 ## Post-Completion
 *Informational only*
-- When/whether the repo goes public (strip session links/Claude markers; stage files explicitly).
+- When/whether the repo goes public (no private links; stage files explicitly).
 - Report confirmed c66g bugs upstream. Ask Nikolay which JAX features broke in fesom_jax on newer JAX (upgrade canary).

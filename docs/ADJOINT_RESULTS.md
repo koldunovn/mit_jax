@@ -306,7 +306,7 @@ forward check + 3 gradients + screen 37 min; 12 FD evaluations of the 28-day J ~
 5. The dynamic-field norm is dominated by the momentum AB-history cotangents (units m/s^2); a scaled norm (per-field
    RMS weights) would make the screen independent of units. Worth adopting?
 
-## M2: sea-ice-only adjoint window, before ocean coupling (2026-09-23, sub-agent)
+## M2: sea-ice-only adjoint window, before ocean coupling (2026-09-23)
 SEAICE_MODEL stepped on its own carried state (18 fields) with the ocean and EXF inputs of oracle.FULL iteration 1
 prescribed (harness gate: cycling iterations 1-3 reproduces P00 bitwise); controls initial HEFF, AREA, UICE, VICE and
 time-constant shifts of atemp, fu, fv; costs Arctic (>70N) ice volume J1 and area J3, Southern Ocean (<60S) volume J2,

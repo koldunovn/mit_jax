@@ -102,7 +102,7 @@ With both flags (set in conftest.py) EXF, grid, GGL90, MOM_VECINV/MOM_CALC_VISC,
 IMPLDIFF and the DYNAMICS driver are bitwise equal to the Fortran at every point, halos included, on both oracles.
 Production runs may use XLA defaults (ulp-level differences only).
 
-## Task 6 — grid and geometry loader (2026-09-23, sub-agent)
+## Task 6 — grid and geometry loader (2026-09-23)
 - `grid_from_files` is bitwise on all 60 geometry fields incl. halos. Python's `math.sin/cos` call the same glibc as
   gfortran; numpy's SIMD trig does not. gcc -O3 fuses SIN/COS of one argument into `sincos()` (ini_cori.F:95/99), whose
   cos differs from `cos()` by up to 2 ulp at 70 points — call what the binary calls.
@@ -111,7 +111,7 @@ Production runs may use XLA defaults (ulp-level differences only).
   halo points; poisoning the unwritten halo points in repeated runs gave an exact dependency mask, and the probe was
   then fixed to code halo points too (strict xfail turned XPASS → full bitwise gate).
 
-## Task 9 — EXF flux-forced forcing (2026-09-23, sub-agent)
+## Task 9 — EXF flux-forced forcing (2026-09-23)
 - A missing stage is information: S03 (CTRL_MAP_FORCING) sits inside `IF (useCTRL)`; the test asserts its absence.
 - Keep Fortran REAL*4 literals in calendar code; record logic tested by hand computation across leap day and year
   ends, dates against datetime. At the first step `changed=F` and the reads come from `first`.
@@ -119,14 +119,14 @@ Production runs may use XLA defaults (ulp-level differences only).
   every point. Signed exchanges produce -0 where Fortran has +0 (harmless; compare values, not bits).
 - FD checks: subtract outputs pointwise before weighting (a large scalar J loses ~1e-7 to cancellation).
 
-## Task 12 — GGL90 (2026-09-23, sub-agent)
+## Task 12 — GGL90 (2026-09-23)
 - V4r4 GGL90_OPTIONS.h enables ALLOW_GGL90_SMOOTH (c66g default off): confirm branches in the preprocessed
   `reference/build/*/bld/*.f`. Under ALLOW_AUTODIFF the caller zeroes viscArU/V, diffKr before the call.
 - SOLVE_DIAGONAL_KINNER solves every column (ignores iMin..iMax). SQRTTWO=1.41421356237310D0 is a literal, not sqrt(2).
 - Measure before choosing negative controls: the planned corner-mask control was a no-op (all 20x16 facet-corner halo
   points dry at every level); one blind gradient point was dry.
 
-## Tasks 14a–c — momentum (2026-09-23, sub-agents)
+## Tasks 14a–c — momentum (2026-09-23)
 - implicitViscosity=T removes the fVer k-to-k carry: MOM_VECINV is exact vectorised over k; kappaRU enters only the
   bottom drag (at k+1), and bottom drag lands in guDissip. ALLOW_AUTODIFF selects IMPLDIFF over MOM_U_IMPLICIT_R.
 - FILL_CS_CORNER_TR_RL fills the caller's hDiv in place (side effect ported). All 8 cube corners are dry in V4r4, so
@@ -135,7 +135,7 @@ Production runs may use XLA defaults (ulp-level differences only).
   after the V4r4 pickup uses AB2 weights, AB3 afterwards; both gated, forcing AB3 at step 1 fails.
 - GGL90_CALC_VISC masks the V increment but not the U increment (ggl90_calc_visc.F:49 vs 56) — literal c66g.
 
-## Tasks 10–11 — EOS, density gradients, IVDC, mixed layer, salt plume (2026-09-23, sub-agent)
+## Tasks 10–11 — EOS, density gradients, IVDC, mixed layer, salt plume (2026-09-23)
 - Bitwise on both oracles. FMA (default XLA) gave 1.6e-14 in rhoInSitu and 2.4–3.8e-13 in sigmaX/Y (differencing
   amplifies ulps): compare against a numpy transcription before doubting a literal port.
 - A corner halo fill can be invisible in the output (masks 0 at corner halos): negative control first, then gate the
@@ -148,7 +148,7 @@ Production runs may use XLA defaults (ulp-level differences only).
 - Right after an edit on the login node, compute nodes may still see stale files (home FS cache): checksum inside srun
   before trusting a surprising failure.
 
-## Task 13 — GM/Redi (2026-09-23, sub-agent)
+## Task 13 — GM/Redi (2026-09-23)
 - Bitwise on both oracles (P05 tensor, P06 exchange, T01 residual flow, T13 kappaRk via GMREDI_CALC_DIFF).
 - stableGmAdjTap hard-codes its limits: tensor slope <= 2e-3 (gmredi_slope_limit.F:593), bolus 5*min(|S|,1e-4)
   (gmredi_slope_psi.F:377): data.gmredi GM_maxSlope/GM_Scrit/GM_Sd/GM_slopeSqCutoff have no effect, taper factors 1.
@@ -159,7 +159,7 @@ Production runs may use XLA defaults (ulp-level differences only).
 - Inputs missing from a stage can be rebuilt bitwise when they are pointwise maps of dumped fields
   (recip_hFacW = where(maskW, 1/hFacW, 0), update_r_star.F:76-79).
 
-## Task 16b — tracer integration (2026-09-23, sub-agent)
+## Task 16b — tracer integration (2026-09-23)
 - No Adams-Bashforth on T/S in V4r4: with DST3 (scheme 30) all AB flags are F (gad_init_fixed.F:146-165; STDOUT
   confirms), TEMP_INTEGRATE ends with CYCLE_TRACER; gtNm/gsNm stay 0. Check derived runtime flags in STDOUT
   (AdamsBashforth_T/Gt, tracForcingOutAB, diffKrNrS) before porting a branch the plan assumed.
@@ -169,7 +169,7 @@ Production runs may use XLA defaults (ulp-level differences only).
 - Replaying intermediate dumps localises errors: a 6e-14 T13 error was 1-ulp input differences (algsimp division
   rewrite) amplified by the implicit solve; the solver fed dumped inputs was bitwise.
 
-## Task 16a — DST3 multi-dimensional advection (2026-09-23, sub-agent)
+## Task 16a — DST3 multi-dimensional advection (2026-09-23)
 - Design decision (plan Task 16a): per-tile static tables + select. Every pass runs the X and Y blocks on all tiles;
   tables carry each tile's update region (interiorOnly/overlapOnly bounds, edge flags) and the corner-fill gathers.
   Per-facet order: f1 X,Y; f2 X, X-overlap, Y; f3 Y-overlap, X, Y; f4 Y,X; f5 Y, Y-overlap, X. Costs 6 DST3 flux
@@ -179,7 +179,7 @@ Production runs may use XLA defaults (ulp-level differences only).
 - Under z* GAD_ADVECTION reads UPDATE_R_STAR's hFacW/S, recip_hFacC (not recip_hFacNew). Every shared face flux was
   checked bitwise equal on both sides of every tile/facet edge (signed vector exchange of fluxes).
 
-## Task 15 — free surface, r*, cg2d (2026-09-23, sub-agent)
+## Task 15 — free surface, r*, cg2d (2026-09-23)
 - CG reproduces the Fortran bitwise, iteration count included (SMOKE 179/172, FORCED 164/161/158), with: sequential
   per-tile partial sums, fixed tile order, no FMA, traced parameters. cg2dNorm as a constant let XLA regroup
   `(b*cg2dNorm)*rhsNorm` (iterate drift 1e-9, same count). A numpy CG with sequential sums located the rewrite.
@@ -196,7 +196,7 @@ Production runs may use XLA defaults (ulp-level differences only).
   counts included, under the gate flags. ~4 s per step on 32 CPU cores after compilation (compile ~12 s).
 - tools/step_vs_dump.py = first-divergence harness (stage by stage vs dumps).
 
-## Task 8 — initialisation from the pickup (2026-09-23, sub-agent)
+## Task 8 — initialisation from the pickup (2026-09-23)
 - state_from_pickup == Fortran start-of-run state bitwise on all 88 fields (both oracles); one step from it == iteration 2.
 - "mult_*=0" does NOT switch controls off: ctrl_map_ini_genarr adds the smoothed, weighted xx_* adjustments to theta,
   salt, u, v, etaN, kapGM, kapRedi, diffKr whatever mult is (mult only weights the cost). Production V4r4 (useCTRL=T)
@@ -206,7 +206,7 @@ Production runs may use XLA defaults (ulp-level differences only).
 - MDSIO reads = fill interior, then exchange: pickup-field halos are 0 (TKE: GGL90TKEmin*maskC) where exch2 does not
   write. mom_StartAB = nIter0 (=1) with the V4r4 pickup: AB2 weights at step 1.
 
-## Task 17 — backward-mode semantics (2026-09-23, sub-agent)
+## Task 17 — backward-mode semantics (2026-09-23)
 - "Package off in the adjoint" is decided by where the TAF STOREs sit, not by the flag: kappaRk / kappaRU/RV are
   stored after the GGL90 terms, so TAF's ecco adjoint uses the FORWARD Kv/Av in the implicit solves = frozen
   coefficients = stop_gradient on the GGL90 outputs (not "recomputed without GGL90"). ZERO_ADJ_LOC(sigma) also cuts
@@ -234,7 +234,7 @@ Production runs may use XLA defaults (ulp-level differences only).
   shared files: manifest.py, exchange.py).
 - Tier 1 on HEAD 4455541: 83 passed in 5.7 min (clean worktree).
 
-## Task 7 (sharded) — shard_map over tiles, P=4 == P=1 bitwise (2026-09-23, sub-agent)
+## Task 7 (sharded) — shard_map over tiles, P=4 == P=1 bitwise (2026-09-23)
 - Tiles in P contiguous blocks, padded with bitwise replicas of tile 1 (finite, never read, dropped). Exchanges from the
   probed maps: local gathers + greedy-coloured ppermute rounds (K = 0/1/3 at P = 1/2/4); a P=4 step has 69
   collective-permutes, 9 all-reduces, no all-gather/all-to-all. Full step P=2 and P=4 bitwise == P=1 on 90 fields;
@@ -248,7 +248,7 @@ Production runs may use XLA defaults (ulp-level differences only).
 - "Not written by the exchange" != "not read": exch2's corner pass reads open-edge halos (halo-poison sets must exclude them).
 - NFS: a fresh PYTHONPYCACHEPREFIX per run avoids importing a stale .pyc right after an edit.
 
-## Task 8b — production control adjustments (2026-09-23, sub-agent)
+## Task 8b — production control adjustments (2026-09-23)
 - useCTRL=T initial state and step 1 bitwise vs the production oracle. WC01 = sqrt(recip_rA*recip_drF) * 150
   pseudo-steps of SMOOTH_DIFF3D (explicit RHS + AB2 + implicit vertical) * norm; divide by sqrt(weight), add, bound,
   exchange. Bitwise needed the real*4 write/read round trip of the smoothing operators (smoothprec=32) and the model's
@@ -258,7 +258,7 @@ Production runs may use XLA defaults (ulp-level differences only).
 - Cost: setup with useCTRL ~160 s + state_from_pickup ~150 s (7 controls x 150 pseudo-steps) — the whole-array gather
   exchange dominates; a halo-only exchange is the main speed-up.
 
-## Task 18 — checkpointing, gradient drivers, reverse cost (2026-09-23, sub-agent)
+## Task 18 — checkpointing, gradient drivers, reverse cost (2026-09-23)
 - The "44x reverse/forward" was compile time: closed-over P, g, EXF inputs became constants XLA folded (275 s compile;
   a fresh jit per "second call" recompiled). Warm: CPU 4.1x, A100 1.54x (one step). Time warm calls on one jitted
   object; pass model data (incl. the Exchanger, now a pytree) as jit arguments (step-VJP compile 64 s -> 26 s).
@@ -288,7 +288,7 @@ Production runs may use XLA defaults (ulp-level differences only).
 - The theta minimum of -4.8 degC in the useCTRL=F runs is gone with the control adjustments (-2.08 degC): the optimised
   IC adjustments matter physically, not just for the cost function.
 
-## Task 19 — budgets and means (2026-09-23, sub-agent)
+## Task 19 — budgets and means (2026-09-23)
 - Under r* the State's hFacC is one step behind its theta: content = rA*drF*h0FacC*rStarFacC*theta (wrong pairing:
   4e-2 relative error in heat).
 - With temp_EvPrRn = salt_EvPrRn = 0 the EmPmR*theta_surf terms of continuity/advection cancel exactly against
@@ -301,7 +301,7 @@ Production runs may use XLA defaults (ulp-level differences only).
 - My run_jax snapshots had the tile axis in the wrong place for 3-D fields (tiles_to_compact wants tiles at -3) — the
   budgets agent found it; fixed with the compact() helper.
 
-## M2.0 — full-V4r4 dump oracle (2026-09-23, sub-agent)
+## M2.0 — full-V4r4 dump oracle (2026-09-23)
 - 40 new tree-scoped stages (EXF sub-calls incl. bulk-formula locals before/after the stability iterations; SEAICE_MODEL
   sub-calls; dynsolver; LSR per Picard pass `_p1/_p2`; advdiff per field; V4r4 seaice_growth); new kinds U: (interior
   locals) and N: (scalars). 12.5 GB per dumped iteration. Dumps on/off byte-identical (T,S,Eta,U,V,W,PH,PHL, all
@@ -313,7 +313,7 @@ Production runs may use XLA defaults (ulp-level differences only).
 - Process: the agent ran `rm -rf` once on a non-existent scratch path (nothing deleted) — against the no-deletion rule;
   reported to Nikolay.
 
-## Task 21 — M1 adjoint acceptance (2026-09-23, sub-agent)
+## Task 21 — M1 adjoint acceptance (2026-09-23)
 - 28-day gradients of box-mean theta (adjsen box) on LLC90, production ff, one A100-80: exact and ecco modes pass
   every bar (FD plateau for 6 controls, TL/adjoint 3e-13, amplification screen, forward bitwise, 3 repeats 3e-14).
   The exact adjoint needs no ECCO freezes at 4 weeks here (unlike fesom_jax); the freezes change directional
@@ -326,7 +326,7 @@ Production runs may use XLA defaults (ulp-level differences only).
 - Open for Nikolay: adjsen box edge (script tests YC<=151 which is always true -> box to 180E); J scaling (literal
   adjsen divides by box volume twice); default science mode (exact is stable here); units-weighted screen norm.
 
-## M2.5 — sea-ice advection/diffusion + reg_ridge (2026-09-23, sub-agent)
+## M2.5 — sea-ice advection/diffusion + reg_ridge (2026-09-23)
 - SEAICE_ADVDIFF (DST3-FL, SEAICEadvScheme=33, flux form, HEFF/AREA/HSNOW) and SEAICE_REG_RIDGE bitwise vs
   full_jaxdump_v5 at it 1-3, halos included (A01-A06, I02, I03 incl. all 7 TICES levels); P=4 == P=1.
 - SEAICE_ADVECTION is an older variant of GAD_ADVECTION (interiorOnly only in pass 1, different fill conditions): the
@@ -339,7 +339,7 @@ Production runs may use XLA defaults (ulp-level differences only).
   division). Stacked fields share the uTrans cotangent, so one NaN lane poisons every field's gradient.
 - At limiter kinks JAX splits the derivative 0.5/0.5 — a convention, not TAF's value (relevant for M3).
 
-## M2.3 — sea-ice thermodynamics (2026-09-23, sub-agent)
+## M2.3 — sea-ice thermodynamics (2026-09-23)
 - V4r4 SEAICE_GROWTH override + SEAICE_SOLVE4TEMP + SEAICE_BUDGET_OCEAN bitwise vs full_jaxdump_v5 at every dumped
   stage (H01-H06, I04; it 1-3), replayed per stage and composed; SEAICE_multDim=1 so only category 1 is computed.
 - The oracle's transcendentals can block bitwise: gfortran calls glibc 2.28's ifunc-selected FMA exp (not correctly
@@ -352,7 +352,7 @@ Production runs may use XLA defaults (ulp-level differences only).
   adjoints of what sea ice overwrote (Qnet, EmPmR, saltFlux) pass through as if the package were the identity — not a
   stop_gradient. The kernel gives the exact derivative for now.
 
-## M2.1-2 — full-tree EXF: reads, radiation, zenith angle, wind, bulk formulae, mapfields (2026-09-23, sub-agent)
+## M2.1-2 — full-tree EXF: reads, radiation, zenith angle, wind, bulk formulae, mapfields (2026-09-23)
 - EXF_GETFORCING (EXF_GETFFIELDS ... EXF_MAPFIELDS) bitwise vs full_jaxdump_v5 at X01-X08 incl. the bulk-formula
   locals X05a/X05b, it 1-3, halos included; only the unread diagnostic zen_fsol_daily differs (2e-16, XLA arccos).
 - Run each gate twice, once with glibc injected through a test-only pure_callback: that separates "the port is
@@ -363,7 +363,7 @@ Production runs may use XLA defaults (ulp-level differences only).
 - Dump stages inside a routine can sit after partial updates (lwflux is already set at X02, inside EXF_RADIATION).
 - Parallel indexing of the full oracle: ~5 s instead of ~110 s.
 
-## M2.4 — sea-ice dynamics: SEAICE_DYNSOLVER with LSR (2026-09-23, sub-agent)
+## M2.4 — sea-ice dynamics: SEAICE_DYNSOLVER with LSR (2026-09-23)
 - Whole dynsolver bitwise vs full_jaxdump_v5 it 1-3 (I00 -> Y01..Y06 -> L01-L04 per Picard pass -> I01), LSOR sweep
   counts 178/118, 112/82, 84/58 and S1/S2/WFAU/WFAV equal (stopping margin small: S2 = 1.986e-4 vs LSR_ERROR 2e-4);
   only the unread uice_fd/vice_fd differ by 1 ulp at 27-45 points (gcc fuses SIN/COS into sincos). P=4 == P=1.
@@ -380,7 +380,7 @@ Production runs may use XLA defaults (ulp-level differences only).
   (seaiceMass starts at 1000), so all-point gates need the entry values carried in the state.
 - Cost: ~1.2 s/step on 16 CPU cores (~3.5 ms per sweep); ~16k sequential scan steps per sweep — GPU cost unmeasured.
 
-## M2.6a — ocean kernels and initial state on the full tree (2026-09-23, sub-agent)
+## M2.6a — ocean kernels and initial state on the full tree (2026-09-23)
 - Every M1 ocean kernel replays bitwise on full_jaxdump_v5 (it 1-3, halos) — only the parameter readers refused the
   full namelists. The full-tree start-of-step-1 state (grid, ctrl mixing, S00/G00, 6 sea-ice fields with TICES x7,
   sIceLoad) is bitwise from setup + state_from_pickup (+ pickup_seaice, pkgs/seaice_init.py).
@@ -400,7 +400,7 @@ Production runs may use XLA defaults (ulp-level differences only).
   GMREDI_WITH_STABLE_ADJOINT cuts sigma for every reader = "stable"); ecco() never selects it. Effect test: GM path
   exactly 0, GGL90 path bitwise the exact one, "stable" differs there; forward bitwise.
 
-## M2.6b-1 — SEAICE_MODEL driver, fixed sea-ice fields, shared libm, sea-ice adjoint levels (2026-09-23, sub-agent)
+## M2.6b-1 — SEAICE_MODEL driver, fixed sea-ice fields, shared libm, sea-ice adjoint levels (2026-09-23)
 - The whole SEAICE_MODEL (wind exchange, DYNSOLVER incl. clipping, ADVDIFF, REG_RIDGE, GROWTH, post-growth
   exchanges), chained 1->2->3 on its own state with grid + fixed fields from the files, is bitwise vs full_jaxdump_v5
   at I00-I04 and P00, halos included (only the unread uice_fd/vice_fd: 1 ulp).
@@ -419,7 +419,7 @@ Production runs may use XLA defaults (ulp-level differences only).
   sea ice must be compared statistically.
 - Cost on 16 CPU cores: 0.7-1.3 s/step (LSR ~3.8 ms/sweep); gradient ecco/no_dynamics ~1.8 s, full 25 s.
 
-## Fortran mpi13 twin: 13 ranks x one 90x90 tile == serial13 bitwise (2026-09-23, sub-agent)
+## Fortran mpi13 twin: 13 ranks x one 90x90 tile == serial13 bitwise (2026-09-23)
 - With GLOBAL_SUM_ORDER_TILES (c66g default, CPP_EEOPTIONS.h:132) GLOBAL_SUM_TILE_RL is decomposition-independent
   (zeroed per-tile array, MPI_Allreduce, sum in fixed tile order) and W2_MAP_PROCS puts tile J+1 on rank J: the JAX
   tiling runs on 13 ranks bitwise = serial13 (1 day ff + full, 1 month full: every output file, the AD tapes
@@ -435,7 +435,7 @@ Production runs may use XLA defaults (ulp-level differences only).
   (mon_AdVarExch, AUTODIFF_PARAMS.h) and checks gradients point-wise (grdchk) — no cross-field norm; our per-field
   screen + FD sweeps match that.
 
-## M2.6b-2 — full-V4r4 FORWARD_STEP (2026-09-23, sub-agent)
+## M2.6b-2 — full-V4r4 FORWARD_STEP (2026-09-23)
 - The composed full-tree step (bulk EXF, CTRL_MAP_FORCING, pre-ice zeroing, SEAICE_MODEL, SALT_PLUME_DO_EXCH +
   EXTERNAL_FORCING_SURF, ocean) was bitwise on the first run: 820 dumped (stage, field) pairs of step 1, the free run to
   iteration 4 vs the Fortran pickups, step 1 from the pickup, and 24 steps from the pickup vs the 1-day run's pickups
@@ -452,7 +452,7 @@ Production runs may use XLA defaults (ulp-level differences only).
   the depth seam changes derivatives. AdjointConfig.seaice defaults to "ecco" everywhere (Nikolay).
 - CPU cost: ~6.3 s/step (16-32 cores, sequential LSR sweeps dominate); compile ~45 s; setup + init ~4-5 min.
 
-## LSR on GPU — Pallas forward sweep, unrolled XLA fallback (2026-09-23, sub-agent, branch lsr-perf)
+## LSR on GPU — Pallas forward sweep, unrolled XLA fallback (2026-09-23, branch lsr-perf)
 - The literal LSOR sweep (90 lines x 2 Thomas substitutions of 89 steps, ~16k sequential scan steps) was launch-bound
   on GPUs (A100-40 181 ms, GH200 92 ms/sweep). Three faster forms keep the operation order and are bitwise equal to
   the Fortran on CPU, A100 and GH200 (whole dynsolver it 1-3, sweep counts 178/118, 112/82, 84/58): lax.scan unroll of
@@ -476,7 +476,7 @@ Production runs may use XLA defaults (ulp-level differences only).
   (adjoint vs tangent 5e-16).
 - sbatch --export=ALL,VAR="a,b c" splits VAR at the comma: pass script arguments after the script name instead.
 
-## M2 sea-ice-only adjoint window, 6-48 steps (2026-09-23, sub-agent)
+## M2 sea-ice-only adjoint window, 6-48 steps (2026-09-23)
 - The implicit-LSR sea-ice adjoint is FD-exact over 2 days only against a converged forward: at LSR_ERROR 2e-4, FD along
   stress/velocity is off by 1-330 % and the gradient itself shifts by up to 12 %.
 - Exactly-zero snow under Antarctic summer ice gives FD error ~1/h (1e-8 perturbation -> 1e-26 m snow -> 1e-5 m HEFF

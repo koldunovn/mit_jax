@@ -22,7 +22,7 @@ exchange ignoring corners, exch2_s3d_rl.F) is the scalar exch2 map restricted to
 reads (i=0, sNx+1 for j=1..sNy and j=0, sNy+1 for i=1..sNx): the full-width exch2 map writes the same values there.
 Halo points no exchange writes (open facet edges) keep 0, as the common-block arrays do (ini_cg2d.F:65-78).
 
-Differentiation (CLAUDE.md: never through solver iterations): `cg2d_solve` is a custom_jvp whose primal is the
+Differentiation (docs/PORTING_RULES.md: never through solver iterations): `cg2d_solve` is a custom_jvp whose primal is the
 literal forward iteration and whose tangent is the implicit derivative dx = A^-1 (db - dA x), with A^-1 a
 `jax.lax.custom_linear_solve(symmetric=True)` of the same preconditioned CG from a zero first guess to `adj_tolerance`
 (normalised residual), used for the tangent and (transposed) for the adjoint alike. The unknown is the interior of the

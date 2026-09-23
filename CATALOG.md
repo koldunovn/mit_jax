@@ -32,7 +32,7 @@ The `global_oce_llc90` README's ftp server no longer resolves — its ~595 MB te
 
 | Where | What | Read first |
 |---|---|---|
-| `~/FESOM_port` | FAILED first C port (Mar–Apr 2026): code-first, no dumps, simplifications | `CLAUDE.md`, memory = blow-up hunt log |
+| `~/FESOM_port` | FAILED first C port (Mar–Apr 2026): code-first, no dumps, simplifications | project notes = blow-up hunt log |
 | `~/port2` | SUCCESSFUL literal C port + instrumented Fortran reference | `FRESH_START.md`, `fesom2_port/docs/PORT_EXPERIENCE_REPORT.md`, `.../PORTING_LESSONS.md`, `inspect_dump.py`, `fesom2/src/fesom_dump_shim.F90` |
 | `~/port_kokkos` (+ `_base _ice _int _mp _part _pre _sp _ssh _wh _xmach` worktrees) | C++/Kokkos GPU port, bit-identical Serial ladder, GPU fidelity | `docs/KOKKOS_PORTING_LESSONS.md` (D1–D22, L1–L132), `GPU_FIDELITY.md`, `SCATTER_STRATEGY.md`, `REFERENCE_RUNS.md` |
 | `~/port_jax` (github koldunovn/fesom_jax; worktrees `_b296 _main_ab _review`) | FESOM2 in JAX: sharded, differentiable, 62-yr hindcast | `docs/PORTING_LESSONS.md` (6.9k lines), `ADJOINT_HORIZON.md`, `ADJOINT_CHECKPOINTING.md`, `LIMITER_GRADIENTS.md`, `PARALLELISM.md`, `JAX_RAGGED_A2A_BUG.md`, `REFERENCE_RUNS.md` |

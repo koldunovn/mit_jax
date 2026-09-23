@@ -1,6 +1,6 @@
 # Kernel porting guide (M1 kernels, plan Tasks 9–16b)
 
-Read `CLAUDE.md` (project rules) first. This file is the working recipe every kernel port follows.
+Read `docs/PORTING_RULES.md` (project rules) first. This file is the working recipe every kernel port follows.
 
 ## Rules that decide everything
 - **Literal translation** of the Fortran the V4r4 flux-forced build executes (c66g `MITgcm_c66g/`, overridden by
