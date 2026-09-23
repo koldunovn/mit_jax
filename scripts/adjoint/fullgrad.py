@@ -136,7 +136,9 @@ H_DEFAULT = {"theta": (1e-1, 1e-2, 1e-3, 1e-4), "kapGM": (1e-1, 1e-2, 1e-3, 1e-4
              "atemp": (1e-1, 1e-2, 1e-3, 1e-4), "aqh": (1e-3, 1e-4, 1e-5, 1e-6), "tauu": (1e-2, 1e-3, 1e-4, 1e-5)}
 # per-direction h (sea-ice directions: switch flips in SEAICE_GROWTH / the LSOR counts dominate the FD error at larger h;
 # the forward is deterministic, so small h costs only round-off: |J| eps / (h |dJ|) ~ 1e-6 at h = 1e-6 for atemp_arctic)
-H_DIR = {"atemp_arctic": (1e-3, 1e-4, 1e-5, 1e-6), "heff_arctic": (1e-2, 1e-3, 1e-4, 1e-5)}
+H_DIR = {"atemp_arctic": (1e-3, 1e-4, 1e-5, 1e-6), "heff_arctic": (1e-2, 1e-3, 1e-4, 1e-5),
+         "atemp_pt": (1.0, 1e-1, 1e-2, 1e-3), "atemp_arctic_pt": (1e-1, 1e-2, 1e-3, 1e-4),
+         "heff_pt": (1e-1, 1e-2, 1e-3, 1e-4)}
 
 
 def git_head():
@@ -380,6 +382,24 @@ class FullExperiment:
         out["heff_arctic"] = {"heff": heff0 * arc}
         where["heff_arctic"] = dict(desc=f"relative change of the initial HEFF north of {ARCTIC_LAT}N (direction = "
                                          f"HEFF0 there)", ncols=int(arc.sum()))
+        # single-column directions (grdchk-like): one perturbed column has far fewer switch flips (bulk-formula
+        # stability, sea-ice thermodynamic branches) per h than a footprint of hundreds of columns
+        t, _, j, i = pA
+        d = z2.copy()
+        d[t, j, i] = 1.0
+        out["atemp_pt"] = {"atemp": d}
+        where["atemp_pt"] = dict(point=(t, j, i), desc="+1 K atemp at the surface column of theta_A_centre",
+                                 lon=float(np.asarray(self.g.xC)[t, j, i]), lat=float(np.asarray(self.g.yC)[t, j, i]))
+        pI = self.point(-150.0, 78.0, 0)            # Canada Basin, multi-year ice
+        t, _, j, i = pI
+        d = z2.copy()
+        d[t, j, i] = 1.0
+        out["atemp_arctic_pt"] = {"atemp": d}
+        out["heff_pt"] = {"heff": d.copy()}
+        for nm, desc in (("atemp_arctic_pt", "+1 K atemp"), ("heff_pt", "+1 m initial HEFF")):
+            where[nm] = dict(point=(t, j, i), desc=f"{desc} at one Canada Basin column (150W, 78N)",
+                             lon=float(np.asarray(self.g.xC)[t, j, i]), lat=float(np.asarray(self.g.yC)[t, j, i]),
+                             heff0=float(heff0[t, j, i]))
         self.where = where
         full = {}
         for n, d in out.items():
@@ -446,7 +466,8 @@ def action_grad(E, mode, out, log):
                    grad_norm={k: float(np.linalg.norm(v)) for k, v in g.items()},
                    grad_finite=bool(all(np.all(np.isfinite(v)) for v in g.values())),
                    dirderiv={n: mw.dir_dot(g, d) for n, d in E.dirs.items()},
-                   samples={n: float(g["theta"][w["point"]]) for n, w in E.where.items() if "point" in w},
+                   samples={n: float(g["theta"][w["point"]]) for n, w in E.where.items()
+                            if len(w.get("point", ())) == 4},
                    trace=o.trace)
         res.append((o.loss, g))
         if r > 0:
@@ -596,31 +617,45 @@ def action_tl(E, mode, out, log):
             emit(out, row, log)
 
 
+def objective_parts(E, step):
+    """jit(theta, model, st0, xs) -> (J_theta, J_ice): the two parts of J over the whole window (schedule none); J =
+    J_theta + J_ice is the same float64 addition as grad._objective's."""
+    def J(theta, model, st0, xs):
+        m = E.params_fn(theta, model)
+        s0 = E.init_fn(theta, st0)
+        s_n, acc = ck.integrate(step, m, s0, xs, schedule="none", cost=E.cost)
+        return acc, E.final_cost(m, s_n)
+    return jax.jit(J)
+
+
 def action_fd(E, mode, out, log):
-    """Central differences along --dirs (default all named directions), h-sweep (--hs or H_DEFAULT per control
-    kind). Forward noise floor: spread of --fd-repeats evaluations of J at the base point. The FD rows do not depend
-    on the mode (forward only); the mode only names the compiled program."""
+    """Central differences along --dirs (default all named directions), h-sweep (--hs, else H_DIR per direction or
+    H_DEFAULT per control kind), of J and of its two parts (J_theta, J_ice). Forward noise floor: spread of
+    --fd-repeats evaluations of J at the base point. The FD rows do not depend on the mode (forward only); the mode
+    only names the compiled program."""
     a = E.a
     if E.sm is not None:
         raise NotImplementedError("fd: one device only")
     step, _ = E.step(mode)
-    Jf = jax.jit(gr._objective(step, schedule="none", segments=None, cost=E.cost, final_cost=E.final_cost,
-                               init_fn=E.init_fn, params_fn=E.params_fn))
-    Jparts = jax.jit(gr._objective(step, schedule="none", segments=None, cost=None, final_cost=E.final_cost,
-                                   init_fn=E.init_fn, params_fn=E.params_fn)) if a.fd_parts else None
+    Jf = objective_parts(E, step)
     xs_d = jax.device_put(E.xs)
     th = E.controls()
+
+    def ev(t_):
+        jt, ji = Jf(t_, E.fm0, E.st0, xs_d)
+        jt, ji = float(jt), float(ji)
+        return jt + ji, jt, ji
+
     t = time.time()
-    j0 = [float(Jf(th, E.fm0, E.st0, xs_d)) for _ in range(max(1, a.fd_repeats))]
+    j0 = [ev(th) for _ in range(max(1, a.fd_repeats))]
     t_first = time.time() - t
     t = time.time()
-    float(Jf(th, E.fm0, E.st0, xs_d))
+    ev(th)
     t_fwd = time.time() - t
-    spread = max(j0) - min(j0)
+    spread = max(j[0] for j in j0) - min(j[0] for j in j0)
     row = E.rowbase("fd_base", mode)
-    row.update(J=j0, spread=spread, forward_s=t_fwd, first_calls_s=t_first)
-    if Jparts is not None:
-        row["J_ice"] = float(Jparts(th, E.fm0, E.st0, xs_d))
+    row.update(J=[j[0] for j in j0], J_theta=j0[0][1], J_ice=j0[0][2], spread=spread, forward_s=t_fwd,
+               first_calls_s=t_first)
     emit(out, row, log)
     names = a.dirs.split(",") if a.dirs else list(E.dirs)
     for n in names:
@@ -629,11 +664,13 @@ def action_fd(E, mode, out, log):
         hs = [float(h) for h in a.hs.split(",")] if a.hs else H_DIR.get(n, H_DEFAULT[kind])
         for h in hs:
             t = time.time()
-            jp = float(Jf(jax.tree.map(lambda x, y: x + h * y, th, d), E.fm0, E.st0, xs_d))
-            jm = float(Jf(jax.tree.map(lambda x, y: x - h * y, th, d), E.fm0, E.st0, xs_d))
+            jp, jpt, jpi = ev(jax.tree.map(lambda x, y: x + h * y, th, d))
+            jm, jmt, jmi = ev(jax.tree.map(lambda x, y: x - h * y, th, d))
             row = E.rowbase("fd", mode)
-            row.update(direction=n, where=E.where[n], h=h, Jp=jp, Jm=jm, J0=j0[0], fd=(jp - jm) / (2.0 * h),
-                       noise_over_h=spread / h, ulp_over_h=float(np.spacing(j0[0])) / h, wall_s=time.time() - t)
+            row.update(direction=n, where=E.where[n], h=h, Jp=jp, Jm=jm, J0=j0[0][0], fd=(jp - jm) / (2.0 * h),
+                       Jp_theta=jpt, Jm_theta=jmt, Jp_ice=jpi, Jm_ice=jmi, fd_theta=(jpt - jmt) / (2.0 * h),
+                       fd_ice=(jpi - jmi) / (2.0 * h), noise_over_h=spread / h,
+                       ulp_over_h=float(np.spacing(j0[0][0])) / h, wall_s=time.time() - t)
             emit(out, row, log)
 
 
