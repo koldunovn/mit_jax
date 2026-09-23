@@ -226,3 +226,10 @@ Production runs may use XLA defaults (ulp-level differences only).
   relative, SST max |diff| 1.2e-7 degC (60,640 of 60,646 surface float32 values identical) — far inside the
   Fortran 13-tile vs 96-rank spread (1e-8 after ONE day). 0.35 s/step (96-core Fortran: 0.2 s/step).
 - A per-step host-side monitor (copying the 3-D state) cost more than the GPU step: monitor on device.
+
+## Process — parallel agents in one working tree (2026-09-23)
+- Agents develop against each other's UNCOMMITTED edits: init.py (committed) called Exchanger.global_max, which
+  existed only in the sharding agent's uncommitted exchange.py — HEAD failed 3 tier-1 tests. Check every commit in a
+  clean worktree (dev/wt_check, clones symlinked) before trusting it; stage only whole-agent files (blob staging for
+  shared files: manifest.py, exchange.py).
+- Tier 1 on HEAD 4455541: 83 passed in 5.7 min (clean worktree).
