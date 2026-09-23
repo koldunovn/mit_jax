@@ -87,3 +87,50 @@ One entry per task, written in the same commit as the task. Cite `file:line`; st
   fail. First version kept the u array as "own value" for the v output of a vector exchange — the real-field gate
   caught it on the first run; the probe-only round trip could not have.
 - The dump reader must be lazy: one dumped iteration of the forced oracle is ~11 GB (41 stages).
+
+## Session 3 kernels — cross-cutting: three XLA rewrites that break bitwise agreement (2026-09-23)
+
+The oracle is gfortran with `-ffp-contract=off`. Three XLA:CPU behaviours each caused 1-ulp differences that
+differencing stencils amplified to ~1e-13 relative (e.g. dPhiHydX); each was isolated by comparing against a plain
+numpy loop in Fortran order (bitwise) and then against jit:
+1. FMA contraction at the default AVX2 ISA (EOS: 5896 points up to 4.5e-13) → `--xla_cpu_max_isa=AVX`.
+2. algsimp folds products of compile-time constants `(x*c1)*c2 -> x*(c1*c2)` (42 % of points), simplifies
+   `c+(y-c) -> y`, rewrites `x/broadcast(d) -> x*(1/d)` even for traced d, and `A/SQRT(B) -> A*RSQRT(B)`
+   → `--xla_disable_hlo_passes=algsimp` for gates, and float parameters as traced pytree leaves
+   (`params_io.params_pytree`) — no optimization barriers in kernels.
+With both flags (set in conftest.py) EXF, grid, GGL90, MOM_VECINV/MOM_CALC_VISC, CALC_PHI_HYD, TIMESTEP (AB3),
+IMPLDIFF and the DYNAMICS driver are bitwise equal to the Fortran at every point, halos included, on both oracles.
+Production runs may use XLA defaults (ulp-level differences only).
+
+## Task 6 — grid and geometry loader (2026-09-23, sub-agent)
+- `grid_from_files` is bitwise on all 60 geometry fields incl. halos. Python's `math.sin/cos` call the same glibc as
+  gfortran; numpy's SIMD trig does not. gcc -O3 fuses SIN/COS of one argument into `sincos()` (ini_cori.F:95/99), whose
+  cos differs from `cos()` by up to 2 ulp at 70 points — call what the binary calls.
+- MDS_FACEF_READ fills the i=sNx+1 / j=sNy+1 halo row before the exchanges; on open edges those values survive or are
+  shifted into other points (EXCH_Z east-edge shift). The first exchange probe (zero halos) could not see copies from
+  halo points; poisoning the unwritten halo points in repeated runs gave an exact dependency mask, and the probe was
+  then fixed to code halo points too (strict xfail turned XPASS → full bitwise gate).
+
+## Task 9 — EXF flux-forced forcing (2026-09-23, sub-agent)
+- A missing stage is information: S03 (CTRL_MAP_FORCING) sits inside `IF (useCTRL)`; the test asserts its absence.
+- Keep Fortran REAL*4 literals in calendar code; record logic tested by hand computation across leap day and year
+  ends, dates against datetime. At the first step `changed=F` and the reads come from `first`.
+- Halos a loop never writes keep old values (fu's i=1-OLx column, EXF halos at fldConst): pass prior arrays, gate
+  every point. Signed exchanges produce -0 where Fortran has +0 (harmless; compare values, not bits).
+- FD checks: subtract outputs pointwise before weighting (a large scalar J loses ~1e-7 to cancellation).
+
+## Task 12 — GGL90 (2026-09-23, sub-agent)
+- V4r4 GGL90_OPTIONS.h enables ALLOW_GGL90_SMOOTH (c66g default off): confirm branches in the preprocessed
+  `reference/build/*/bld/*.f`. Under ALLOW_AUTODIFF the caller zeroes viscArU/V, diffKr before the call.
+- SOLVE_DIAGONAL_KINNER solves every column (ignores iMin..iMax). SQRTTWO=1.41421356237310D0 is a literal, not sqrt(2).
+- Measure before choosing negative controls: the planned corner-mask control was a no-op (all 20x16 facet-corner halo
+  points dry at every level); one blind gradient point was dry.
+
+## Tasks 14a–c — momentum (2026-09-23, sub-agents)
+- implicitViscosity=T removes the fVer k-to-k carry: MOM_VECINV is exact vectorised over k; kappaRU enters only the
+  bottom drag (at k+1), and bottom drag lands in guDissip. ALLOW_AUTODIFF selects IMPLDIFF over MOM_U_IMPLICIT_R.
+- FILL_CS_CORNER_TR_RL fills the caller's hDiv in place (side effect ported). All 8 cube corners are dry in V4r4, so
+  corner code has no oracle signal: gated against a line-by-line transcription on random data instead.
+- c66g AB3 start-up quirk: mom_StartAB = nIter0 is compared with the counts 0/1 (adams_bashforth3.F:87-92): step 1
+  after the V4r4 pickup uses AB2 weights, AB3 afterwards; both gated, forcing AB3 at step 1 fails.
+- GGL90_CALC_VISC masks the V increment but not the U increment (ggl90_calc_visc.F:49 vs 56) — literal c66g.
