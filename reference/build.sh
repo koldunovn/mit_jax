@@ -38,6 +38,14 @@ BUILD=$WORK/build/${TREE}_${LAYOUT}${VARIANT}_$(date +%Y%m%d_%H%M%S)
 mkdir -p "$BUILD/code" "$BUILD/bld" "$WORK/bin"
 cp "$CODE"/*.F "$CODE"/*.h "$CODE"/packages.conf "$BUILD/code/"
 [ "$LAYOUT" = serial13 ] && cp "$REPO/reference/SIZE.h_13x90x90_serial" "$BUILD/code/SIZE.h"
+DEVIATION=""
+if [ "$TREE" = ff ]; then
+  # DEVIATION from the published flux-forced tree (approved by Nikolay 2026-09-23, docs/OVERRIDES.md): its
+  # mdsio_write_meta.F writes nrecords as I6 but it compiles c66g's mdsio_read_meta.F (I5), so it cannot read its
+  # own pickups (403 -> 40). Use the full tree's reader (I6). I/O only; forward physics unchanged.
+  cp "$V4/code/mdsio_read_meta.F" "$BUILD/code/"
+  DEVIATION="ff: mdsio_read_meta.F from the full V4r4 tree (I6 nrecords reader)"
+fi
 cp "$REPO/reference/optfile_levante_gfortran" "$BUILD/"
 if [ "${JAXDUMP:-0}" = 1 ]; then
   /work/ab0995/a270088/mambaforge/envs/mitgcm-jax/bin/python "$REPO/reference/jaxdump/instrument.py" "$TREE" "$BUILD/code" > "$BUILD/instrument.log"
@@ -57,6 +65,7 @@ cd "$BUILD/bld"
   echo "tree $TREE  layout $LAYOUT  variant ${VARIANT:-none}  host $(hostname)  $(date -Is)"
   echo "$GITINFO"
   echo "netcdf: fortran $LEVANTE_NF_PREFIX  c $LEVANTE_NC_LIBDIR"
+  [ -n "$DEVIATION" ] && echo "DEVIATION: $DEVIATION"
   gfortran --version | head -1; mpif90 --version | head -1; nf-config --version
 } | tee ../provenance.txt
 
