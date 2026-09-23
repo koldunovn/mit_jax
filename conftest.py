@@ -22,6 +22,11 @@ FAKE_DEVICES = 4
 _flag = f"--xla_force_host_platform_device_count={FAKE_DEVICES}"
 if "xla_force_host_platform_device_count" not in os.environ.get("XLA_FLAGS", ""):
     os.environ["XLA_FLAGS"] = (os.environ.get("XLA_FLAGS", "") + " " + _flag).strip()
+# 4. No FMA contraction on CPU: the Fortran oracle is built with -ffp-contract=off, while XLA:CPU at its default ISA
+#    (AVX2 includes FMA3) fuses a*b+c. Measured on the JMD95Z EOS (SMOKE it 1): 5896 points differ by up to 4.5e-13
+#    with FMA, 0 with --xla_cpu_max_isa=AVX. Oracle gates are therefore bitwise-capable only with this flag.
+if "xla_cpu_max_isa" not in os.environ.get("XLA_FLAGS", ""):
+    os.environ["XLA_FLAGS"] = (os.environ.get("XLA_FLAGS", "") + " --xla_cpu_max_isa=AVX").strip()
 
 REPO_ROOT = Path(__file__).resolve().parent
 
