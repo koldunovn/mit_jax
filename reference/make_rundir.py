@@ -4,11 +4,12 @@
     make_rundir.py TREE LAYOUT NAME --nsteps N [--monitor SECONDS] [--binary PATH] [--set FILE:GROUP:KEY=VALUE ...]
                    [--pickup-from RUNDIR --niter0 N]    matched restart: start from that run's pickup*.<N> files
 
-TREE = full | ff, LAYOUT = mpi96 | serial13. The directory /work/.../MIT/reference/runs/<NAME> must not exist.
+TREE = full | ff, LAYOUT = mpi96 | serial13 | mpi13. The directory /work/.../MIT/reference/runs/<NAME> must not exist.
 It gets: the tree's production namelists, the overrides below (every one printed and written to OVERRIDES.txt),
-`data.exch2` for 13x90x90 when LAYOUT=serial13, symlinks to every input file `scripts/audit_run_inputs.py`
-derives (the script refuses to create a run with a missing required input), diagnostics sub-directories, and the
-executable (newest frozen binary for TREE/LAYOUT unless --binary).
+`data.exch2` for 13x90x90 when LAYOUT=serial13 or mpi13 (one file for both: same tiles, same tile numbering),
+symlinks to every input file `scripts/audit_run_inputs.py` derives (the script refuses to create a run with a missing
+required input), diagnostics sub-directories, and the executable (newest frozen binary for TREE/LAYOUT unless
+--binary).
 
 Standing overrides for reference runs (deviations from the production namelists, each documented):
   data.pkg  useECCO=F, useProfiles=F, useCAL=T   cost-function packages; their observation inputs (data_constraints)
@@ -71,7 +72,7 @@ def newest_binary(tree, layout, variant=""):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("tree", choices=("full", "ff"))
-    ap.add_argument("layout", choices=("mpi96", "serial13"))
+    ap.add_argument("layout", choices=("mpi96", "serial13", "mpi13"))
     ap.add_argument("name")
     ap.add_argument("--nsteps", type=int, required=True)
     ap.add_argument("--monitor", type=float, default=3600.0)
@@ -99,7 +100,7 @@ def main(argv=None):
         overrides.append((f, g, k, v))
 
     files = {p.name: p.read_text() for p in src.iterdir() if p.is_file() and (p.name.startswith("data") or p.name == "eedata")}
-    if a.layout == "serial13":
+    if a.layout in ("serial13", "mpi13"):
         files["data.exch2"] = (REPO / "reference" / "data.exch2_13x90x90").read_text()
     for f, g, k, v in overrides:
         files[f] = set_value(files[f], g, k, v)
@@ -136,7 +137,7 @@ def main(argv=None):
         o.write(f"tree {a.tree} layout {a.layout} namelists from {src}\n")
         for f, g, k, v in overrides:
             o.write(f"{f}:{g}:{k}={v}\n")
-        if a.layout == "serial13":
+        if a.layout in ("serial13", "mpi13"):
             o.write("data.exch2 <- reference/data.exch2_13x90x90 (no blankList)\n")
     for name, p in links.items():
         (run / name).symlink_to(p)

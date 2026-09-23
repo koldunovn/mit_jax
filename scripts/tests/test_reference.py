@@ -105,6 +105,23 @@ def test_full_stage1_twin_and_podaac_snapshot():
         assert r["max_abs"] < 1e-3 and r["rms"] < 1e-6 and r["dry_nonzero_model"] == 0, (name, r)
 
 
+def test_mpi13_twin_is_bitwise_serial13():
+    """13 ranks x one 90x90 tile (mpi13) == one process x 13 tiles (serial13), both trees, 1 day: state and pickups
+    byte-identical, every common %MON value identical (mpi13 only adds the SST/SSS stats, printed with one tile per
+    process). c66g CPP_EEOPTIONS.h:132 GLOBAL_SUM_ORDER_TILES sums per-tile values in global tile order whatever the
+    decomposition, and W2_MAP_PROCS puts exch2 tile p+1 on rank p. The full comparison (every output file, AD tapes
+    reassembled per tile) is recorded in docs/REFERENCE_RUNS.md."""
+    for tree, pickups in (("ff", ("pickup", "pickup_ggl90")), ("full", ("pickup", "pickup_ggl90", "pickup_seaice"))):
+        s, m = run(f"ref_{tree}_serial13_1day"), run(f"ref_{tree}_mpi13_1day")
+        same = _same_bytes(s, m, 25)
+        assert all(same.values()), (tree, same)
+        for pk in pickups:
+            assert (s / f"{pk}.ckptA.data").read_bytes() == (m / f"{pk}.ckptA.data").read_bytes(), (tree, pk)
+        diffs, only = compare_monitors(read_monitor(s / "STDOUT.0000"), read_monitor(m / "STDOUT.0000"))
+        assert set(only) == SERIAL_ONLY_MISSING, (tree, only)
+        assert len(diffs) > 2000 and max(diffs.values()) == 0.0, (tree, max(diffs.items(), key=lambda kv: kv[1]))
+
+
 # ---------------------------------------------------------------------------------------------------------------------
 # M2.0: full-tree dump oracle (EXF bulk + sea-ice stages, reference/jaxdump/SUBSTEPS.md). One tier-1 test (budget).
 

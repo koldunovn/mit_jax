@@ -418,3 +418,19 @@ Production runs may use XLA defaults (ulp-level differences only).
   and O(10 W/m2) Qnet jumps within one carried step — only gate flags give a bitwise chain; GPU/production twins with
   sea ice must be compared statistically.
 - Cost on 16 CPU cores: 0.7-1.3 s/step (LSR ~3.8 ms/sweep); gradient ecco/no_dynamics ~1.8 s, full 25 s.
+
+## Fortran mpi13 twin: 13 ranks x one 90x90 tile == serial13 bitwise (2026-09-23, sub-agent)
+- With GLOBAL_SUM_ORDER_TILES (c66g default, CPP_EEOPTIONS.h:132) GLOBAL_SUM_TILE_RL is decomposition-independent
+  (zeroed per-tile array, MPI_Allreduce, sum in fixed tile order) and W2_MAP_PROCS puts tile J+1 on rank J: the JAX
+  tiling runs on 13 ranks bitwise = serial13 (1 day ff + full, 1 month full: every output file, the AD tapes
+  reassembled per tile, every %MON value). Process-level GLOBAL_SUM_R8 left in the build feeds prints only.
+- Compare the whole STDOUT, not just %MON: the only other differences are rank 0's per-tile prints and the SST/SSS
+  %MON stats (printed only with one tile per process).
+- The forward ALLOW_AUTODIFF build writes per-process sparse AD tapes (165 GB apparent, 0.75 GB data): compare data
+  regions only, reassembled per tile; never cmp/hash the apparent size.
+- mpi13 speed depends on rank placement (memory bandwidth): 0.59 s/step over 3 NUMA domains, 1.32 s/step with 12
+  ranks in one; serial13 3.7-4.0 s/step. The comparison script was controlled first (96-rank twin bitwise; 96 vs 13
+  caught; planted 1-bit tape flip caught).
+- Amplification screens (Nikolay: "whatever ECCO does"): ECCO/MITgcm monitors adjoint variables per field
+  (mon_AdVarExch, AUTODIFF_PARAMS.h) and checks gradients point-wise (grdchk) — no cross-field norm; our per-field
+  screen + FD sweeps match that.

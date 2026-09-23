@@ -1,25 +1,29 @@
 #!/bin/bash
 # Build the MITgcm c66g Fortran reference for one ECCO v4r4 tree and tile layout (plan Task 4).
 #
-#   reference/build.sh TREE LAYOUT        TREE = full | ff (flux-forced);  LAYOUT = mpi96 | serial13
+#   reference/build.sh TREE LAYOUT        TREE = full | ff (flux-forced);  LAYOUT = mpi96 | serial13 | mpi13
+#     mpi96    production: 96 ranks x 1 tile of 30x30 (the tree's own SIZE.h)
+#     serial13 1 process, 13 tiles of 90x90 (reference/SIZE.h_13x90x90_serial): the JAX port's tiling
+#     mpi13    13 ranks x 1 tile of 90x90 (reference/SIZE.h_13x90x90_mpi13): same tiles and tile-ordered global
+#              sums (GLOBAL_SUM_ORDER_TILES) as serial13, run in parallel
 #   variants (env): JAXDUMP=1  instrumented with the per-substep dump shim (reference/jaxdump/instrument.py)
 #                   GCOV=1     -O0 --coverage, for the branch-coverage run (docs/BRANCHES.md)
 #   sbatch reference/jobs/build.sbatch TREE LAYOUT     (preferred: compiles on a shared node)
 #
-# Code dir = the tree's override code (+ SIZE.h for serial13), full packages.conf (autodiff/ctrl/ecco compiled:
+# Code dir = the tree's override code (+ SIZE.h for serial13 / mpi13), full packages.conf (autodiff/ctrl/ecco compiled:
 # ALLOW_AUTODIFF changes forward branches, docs/OVERRIDES.md). Each build goes to a NEW directory
 # /work/.../MIT/reference/build/<tree>_<layout>_<timestamp>; the executable is frozen as
 # /work/.../MIT/reference/bin/mitgcmuv_<tree>_<layout>_<sha256[:12]> with a .txt provenance file.
 # Nothing is deleted or overwritten.
 set -euo pipefail
 
-TREE=${1:?tree: full | ff}; LAYOUT=${2:?layout: mpi96 | serial13}
+TREE=${1:?tree: full | ff}; LAYOUT=${2:?layout: mpi96 | serial13 | mpi13}
 REPO=/home/a/a270088/MIT
 ROOT=$REPO/MITgcm_c66g
 V4=$REPO/"ECCO-v4-Configurations/ECCOv4 Release 4"
 WORK=/work/ab0995/a270088/MIT/reference
 case $TREE in full) CODE="$V4/code" ;; ff) CODE="$V4/flux-forced/code" ;; *) echo "bad tree $TREE"; exit 2 ;; esac
-case $LAYOUT in mpi96) MPIFLAG=-mpi ;; serial13) MPIFLAG= ;; *) echo "bad layout $LAYOUT"; exit 2 ;; esac
+case $LAYOUT in mpi96|mpi13) MPIFLAG=-mpi ;; serial13) MPIFLAG= ;; *) echo "bad layout $LAYOUT"; exit 2 ;; esac
 
 GIT=$(command -v git)   # before module purge (git comes from a module)
 GITINFO="MITgcm $($GIT -C "$ROOT" describe --tags --always)  V4r4-configs $($GIT -C "$REPO/ECCO-v4-Configurations" rev-parse --short HEAD 2>/dev/null || echo '?')  mitgcm-jax $($GIT -C "$REPO" rev-parse --short HEAD) dirty=$($GIT -C "$REPO" status --porcelain | wc -l)"
@@ -38,6 +42,7 @@ BUILD=$WORK/build/${TREE}_${LAYOUT}${VARIANT}_$(date +%Y%m%d_%H%M%S)
 mkdir -p "$BUILD/code" "$BUILD/bld" "$WORK/bin"
 cp "$CODE"/*.F "$CODE"/*.h "$CODE"/packages.conf "$BUILD/code/"
 [ "$LAYOUT" = serial13 ] && cp "$REPO/reference/SIZE.h_13x90x90_serial" "$BUILD/code/SIZE.h"
+[ "$LAYOUT" = mpi13 ] && cp "$REPO/reference/SIZE.h_13x90x90_mpi13" "$BUILD/code/SIZE.h"
 DEVIATION=""
 if [ "$TREE" = ff ]; then
   # DEVIATION from the published flux-forced tree (approved by Nikolay 2026-09-23, docs/OVERRIDES.md): its

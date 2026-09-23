@@ -8,6 +8,7 @@
 # Run a reference run directory made by reference/make_rundir.py.
 #   serial13: sbatch -p shared --ntasks=1 --cpus-per-task=1 --mem=32G reference/jobs/run.sbatch RUNDIR
 #   mpi96:    sbatch -p compute --ntasks=96                              reference/jobs/run.sbatch RUNDIR
+#   mpi13:    sbatch -p compute --ntasks=13   (or -p shared --ntasks=13 --mem=32G)  reference/jobs/run.sbatch RUNDIR
 # Success = exit 0 AND "Execution ended Normally" in STDOUT.0000 (both checked). Never deletes anything.
 set -u
 RUN=${1:?run dir}
@@ -23,6 +24,8 @@ echo "job $SLURM_JOB_ID $(hostname) $(date -Is) layout $LAYOUT binary $(readlink
 T0=$(date +%s)
 if [ "$LAYOUT" = mpi96 ]; then
   srun -n 96 ./mitgcmuv; RC=$?
+elif [ "$LAYOUT" = mpi13 ]; then
+  srun -n 13 ./mitgcmuv; RC=$?
 else
   ./mitgcmuv > STDOUT.0000 2> STDERR.0000; RC=$?
 fi
