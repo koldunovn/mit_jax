@@ -195,3 +195,13 @@ Production runs may use XLA defaults (ulp-level differences only).
   to the Fortran at every dumped stage of step 1 and at the start of iterations 2 and 3 (free run), cg2d iteration
   counts included, under the gate flags. ~4 s per step on 32 CPU cores after compilation (compile ~12 s).
 - tools/step_vs_dump.py = first-divergence harness (stage by stage vs dumps).
+
+## Task 8 — initialisation from the pickup (2026-09-23, sub-agent)
+- state_from_pickup == Fortran start-of-run state bitwise on all 88 fields (both oracles); one step from it == iteration 2.
+- "mult_*=0" does NOT switch controls off: ctrl_map_ini_genarr adds the smoothed, weighted xx_* adjustments to theta,
+  salt, u, v, etaN, kapGM, kapRedi, diffKr whatever mult is (mult only weights the cost). Production V4r4 (useCTRL=T)
+  vs pickup: theta up to 8.7 K, salt 7.0, v 0.79 m/s at single points. The oracles so far use useCTRL=F → port
+  CTRL_MAP_INI_GENARR + pkg/smooth (WC01) + CTRL_BOUND next (gate: ref_ff_jaxdump_v4, useCTRL=T).
+- INI_CG2D writes pW/pS/pC halos that UPDATE_CG2D never rewrites: only a halo-inclusive gate finds such init state.
+- MDSIO reads = fill interior, then exchange: pickup-field halos are 0 (TKE: GGL90TKEmin*maskC) where exch2 does not
+  write. mom_StartAB = nIter0 (=1) with the V4r4 pickup: AB2 weights at step 1.
