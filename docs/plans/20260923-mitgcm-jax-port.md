@@ -137,10 +137,10 @@
 
 - [x] gfortran builds (strict FP; document ifort vs gfortran) of both trees, **with the full `packages.conf` (autodiff/ctrl/ecco compiled: `ALLOW_AUTODIFF` changes forward branches, `docs/OVERRIDES.md`)**: MPI 96×(30×30) and **serial 13×(90×90) = per-substep oracle** (blankList adapted); `GLOBAL_SUM_ORDER_TILES` status recorded
 - [x] frozen binaries under `/work/.../MIT/reference/bin/` with sha256 (+ `_jaxdump`, `_gcov` variants; `reference/make_rundir.py`, `reference/jobs/run.sbatch`)
-- [ ] runs: full V4r4 11 steps vs PO.DAAC snapshot; flux-forced and full V4r4 1 month + 1 year (96 ranks); same runs on 13-tile serial/other tiling = run-to-run spread yardstick; decide whether ecco/profiles packages can be dropped for the reference (document)
-- [ ] provenance (binary sha, namelists, ranks, wall time) in `docs/REFERENCE_RUNS.md`
-- [ ] write tests (achievable): 11-step fields vs PO.DAAC snapshot within float32 + compiler floor; two runs of the same binary bitwise identical; 96-rank vs 13-tile difference recorded as spread
-- [ ] run tests — must pass before Task 5
+- [x] runs: full V4r4 11 steps vs PO.DAAC snapshot; flux-forced and full V4r4 1 month + 1 year (96 ranks); same runs on 13-tile serial/other tiling = run-to-run spread yardstick; decide whether ecco/profiles packages can be dropped for the reference (document) — stage 1 done (11-step PO.DAAC check, twins, spread, ff 1-month); 1-year runs queued
+- [x] provenance (binary sha, namelists, ranks, wall time) in `docs/REFERENCE_RUNS.md` — docs/REFERENCE_RUNS.md session-3 table
+- [x] write tests (achievable): 11-step fields vs PO.DAAC snapshot within float32 + compiler floor; two runs of the same binary bitwise identical; 96-rank vs 13-tile difference recorded as spread — scripts/tests/test_reference.py (6 tests)
+- [x] run tests — must pass before Task 5
 
 ### Task 5: Dump shim (`jaxdump`) and branch coverage
 **Files:**

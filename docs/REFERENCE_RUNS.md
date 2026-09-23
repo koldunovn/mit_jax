@@ -66,3 +66,26 @@ runs lack them — expected, not a difference.
 `JAXDUMP=1 sbatch reference/jobs/build.sbatch TREE serial13` builds with `reference/jaxdump/` (stages:
 `reference/jaxdump/SUBSTEPS.md`). Coverage builds: `GCOV=1` (`-O0 --coverage`):
 `mitgcmuv_ff_serial13_gcov_a0b40f12642b`, `mitgcmuv_full_serial13_gcov_162aa519f1e5`.
+
+## Session 3 runs (2026-09-23)
+
+Dump binaries (jaxdump, 41 stages incl. G00 geometry + exchange probe, per-level phi_hyd/mom_vecinv, temp/salt
+integrate substeps): `mitgcmuv_ff_serial13_jaxdump_4d0f097d4e65`, `_5b71e689d00d` (probe with coded halos).
+
+| run (reference/runs.json name) | config | steps | result |
+|---|---|---|---|
+| `smoke_ff_jaxdump_v3` | ff, useEXF/CTRL/SMOOTH=F, no geothermal | 2 (dumps 1,2) | kernel oracle without forcing |
+| `forced_ff_jaxdump_v3` | ff, useEXF=T, useCTRL=F, no geothermal | 3 (dumps 1-3) | main kernel/step oracle; cg2d 164/161/158 iterations |
+| `probe_exch_ff_v4` | as smoke, probe with coded halos | 1 | source of `mitgcm_jax/data/exch_maps_13x90x90.npz` |
+| `ref_ff_jaxdump_v4` | ff production (useCTRL=T, geothermal) | 3 (dumps 1-3) | oracle for Task 8b (ctrl adjustments) |
+| `ref_full_jaxdump_v4` | full V4r4 | 3 | M2 oracle |
+| `ref_ff_mpi96_1day_a/_b` | ff production, 96 ranks | 24 | bitwise identical twin |
+| `ref_ff_serial13_1day` | ff production, 13 tiles | 24 | spread vs 96 ranks after 1 day: U 7e-9, V 1.1e-8, W 6e-8, PH 1.4e-9 rel |
+| `ref_full_mpi96_1day_a/_b` | full V4r4, 96 ranks | 24 | bitwise twin |
+| `ref_full_mpi96_11steps` | full V4r4, 96 ranks | 11 | vs PO.DAAC 1992-01-02T00: T max 4.0e-4 °C rms 3.8e-7, S 1.9e-4 / 1.3e-7, Eta 7.8e-5 m / 3.2e-7 |
+| `ref_ff_mpi96_1month` | ff production, 96 ranks | 744 | 174 s wall (0.2 s/step on 96 cores) |
+| `twin_ff_nogeo_serial13_1month` | ff, useCTRL=F, no geothermal, daily dumps | 744 | Fortran twin of the JAX January run |
+| `ref_ff_mpi96_1year`, `ref_ff_serial13_1year` | ff production | 8760 | queued (stage 2) |
+
+Wall times: 13-tile serial ~3.2 s/step (1 core); 96 ranks ~0.2 s/step; JAX: one A100 0.35 s/step, 64 CPU cores ~3.5 s/step.
+A launcher job that calls sbatch passes its SLURM_MEM_* on; srun then fails ("mutually exclusive") — launchers unset them.
