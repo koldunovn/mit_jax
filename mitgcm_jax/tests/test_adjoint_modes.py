@@ -90,3 +90,14 @@ def test_forward_bitwise_all_switches(run):
     assert int(aux["cg2d"]["numIters"]) == 164
     for k in END:
         np.testing.assert_array_equal(np.asarray(st1.f[k]), oracle.field(ds, 2, "S00_begin", k), err_msg=k)
+
+
+def test_ggl90_only_preset():
+    """The long-window preset (Nikolay 2026-09-24): exact except GGL90 frozen; sea ice at the default "ecco"; hashable
+    (static jit argument); not the exact config; its seam census is the ggl90 row of test_seam_census."""
+    adj = AdjointConfig.ggl90_only()
+    assert adj == AdjointConfig(ggl90="frozen")
+    assert adj.gm_sigma == "exact" and adj.salt_plume == "exact" and adj.cg2d == "exact" and adj.visc_fac_in_ad is None
+    assert adj.seaice == "ecco"
+    assert not adj.is_exact
+    assert hash(adj) == hash(AdjointConfig(ggl90="frozen"))

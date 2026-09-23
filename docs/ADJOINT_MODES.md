@@ -269,3 +269,12 @@ production LSR_ERROR = 2e-4 the Fortran-like forward stops early, so FD of the p
 derivative by 1-12 % along ice-dynamics directions (sea-ice window study, docs/ADJOINT_RESULTS.md). Decision: keep the
 implicit derivative (no differentiation through iterations, no tighter production tolerance); FD checks of dynamics
 directions use a converged forward (same code path, tighter LSR_ERROR), stated where used.
+
+## Long-window preset `AdjointConfig.ggl90_only()` (Nikolay, 2026-09-24)
+Exact mode with only `ggl90="frozen"` (sea ice at the default "ecco"). Not a TAF/ECCO configuration. Reason
+(docs/ADJOINT_RESULTS.md, "Adjoint horizon"): the exact flux-forced adjoint from 1992-01-01 passes every bar to 112 days
+and breaks after ~4 months through one linearised-GGL90 event (eastern equatorial Pacific, late April 1992); freezing
+GGL90 alone is stable for a year and closer to FD than the full ECCO semantics on most directions; cutting the sigma
+derivative ("stable", "gm_only") alone makes the burst worse. Presets: `AdjointConfig()` exact (windows up to ~4
+months, screened), `AdjointConfig.ggl90_only()` long windows, `AdjointConfig.ecco(nml)` TAF-comparable (the default of
+the gradient drivers).

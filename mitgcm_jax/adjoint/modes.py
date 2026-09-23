@@ -120,6 +120,16 @@ class AdjointConfig:
         return cls()
 
     @classmethod
+    def ggl90_only(cls):
+        """Long-window preset (Nikolay, 2026-09-24; NOT a TAF/ECCO configuration): the exact mode with only GGL90 frozen
+        (sea ice at its default "ecco"). Measured on the flux-forced model from 1992-01-01 (docs/ADJOINT_RESULTS.md,
+        "Adjoint horizon"): the exact adjoint breaks after ~4 months through one linearised-GGL90 event in the eastern
+        equatorial Pacific; freezing GGL90 alone is stable for a year and closer to FD than the full ECCO semantics on
+        most directions (365 d: kapGM 2.3 % vs 5.1 %), whereas cutting sigma ("stable", "gm_only") alone amplifies. Use
+        AdjointConfig.ecco(nml) where TAF compatibility matters."""
+        return cls(ggl90="frozen")
+
+    @classmethod
     def ecco(cls, nml):
         """The reverse-mode semantics of the TAF adjoint of this build with the run's data.autodiff and data.pkg
         (nml: params_io.RunNamelists of the run directory). Defaults are autodiff_readparms.F:66-73; the
