@@ -449,3 +449,67 @@ def test_lsr_sharded_p4_bitwise(env):
     assert _ndiff(blocks.unpad(np.asarray(u4)), out1["uIce"]) == 0
     assert _ndiff(blocks.unpad(np.asarray(v4)), out1["vIce"]) == 0
     assert [tuple(int(c) for c in row) for row in np.asarray(counts)] == [(n, n) for n in COUNTS[it]]
+
+
+def test_lsr_sharded_p4_derivative(env):
+    """The implicit LSR derivative inside shard_map on 4 fake CPU devices (check_vma=True): the tangent of uIce, vIce
+    along FORCEX0/FORCEY0 and the adjoint (seeded on the real tiles only: a padding-tile seed would leak into real
+    tiles through their halo sources) equal P = 1 up to round-off. Before the fix in seaice_lsr._precond (zero first
+    iterate typed varying) the P = 4 derivative did not trace (M2 acceptance, 2026-09-24)."""
+    from jax.sharding import PartitionSpec as PS
+
+    from mitgcm_jax.grid.geometry import Grid
+    from mitgcm_jax.parallel.exchange import MAP_DIR, ExchangeMaps
+    from mitgcm_jax.parallel.shard import tile_mesh
+    from mitgcm_jax.parallel.sharded_exchange import AXIS, ShardedExchanger, TileBlocks
+
+    it = 1
+    P = 4
+    maps = ExchangeMaps.load(MAP_DIR / "exch_maps_13x90x90.npz")
+    blocks = TileBlocks(L.nTiles, P)
+    mesh = tile_mesh(P)
+    exs = ShardedExchanger.build(maps, blocks).device_arrays(mesh)
+    names = ("maskW", "maskS", "maskC", "maskInW", "maskInS", "yC", "fCori", "recip_dxF", "recip_dyF", "recip_dxV",
+             "recip_dyU", "dxF", "dyF", "dxV", "dyU", "recip_rAw", "recip_rAs")
+    g1 = {n: np.asarray(env.g.f[n])[:, :1] if np.ndim(env.g.f[n]) == 4 else np.asarray(env.g.f[n]) for n in names}
+    sg1 = {k: np.asarray(v) for k, v in env.sg(it).items()}
+    ls1 = {k: np.asarray(v) for k, v in env.lsr_state(it).items()}
+    rng = np.random.default_rng(5)
+    J, I = INT
+    dls1 = {k: np.zeros_like(v) for k, v in ls1.items()}
+    for k in ("FORCEX0", "FORCEY0"):
+        dls1[k][:, J, I] = rng.standard_normal((L.nTiles, L.sNy, L.sNx)) * np.abs(ls1[k][:, J, I]).max() * 1e-2
+    wu = np.zeros(L.shape2d)
+    wv = np.zeros(L.shape2d)
+    wu[:, J, I] = rng.standard_normal((L.nTiles, L.sNy, L.sNx)) * sg1["seaiceMaskU"][:, J, I]
+    wv[:, J, I] = rng.standard_normal((L.nTiles, L.sNy, L.sNx)) * sg1["seaiceMaskV"][:, J, I]
+
+    # P = 1
+    def f1(ls):
+        out, _ = sl.seaice_lsr(env.p, Grid({k: jnp.asarray(v) for k, v in g1.items()}, L), sg1, EX, ls)
+        return out["uIce"], out["vIce"]
+
+    (u1, v1), (du1, dv1) = jax.jit(lambda a, b: jax.jvp(f1, (a,), (b,)))(ls1, dls1)
+    ct1 = jax.jit(lambda a, cu, cv: jax.vjp(f1, a)[1]((cu, cv))[0])(ls1, wu, wv)
+
+    # P = 4: the same function in shard_map, derivatives taken outside (as the model's gradient drivers do)
+    def fn(p, ex, gf, sg, ls):
+        out, _ = sl.seaice_lsr(p, Grid(gf, L), sg, ex, ls)
+        return out["uIce"], out["vIce"]
+
+    run = jax.shard_map(fn, mesh=mesh, in_specs=(PS(), PS(AXIS), PS(AXIS), PS(AXIS), PS(AXIS)),
+                        out_specs=(PS(AXIS), PS(AXIS)), check_vma=True)
+    pad = {k: blocks.pad(v) for k, v in g1.items()}
+    sgp = {k: blocks.pad(v) for k, v in sg1.items()}
+    real = (np.arange(blocks.Tpad) < L.nTiles).reshape(-1, 1, 1)
+    f4 = lambda ls: run(env.p, exs, pad, sgp, ls)  # noqa: E731
+    lsp = {k: blocks.pad(v) for k, v in ls1.items()}
+    dlsp = {k: blocks.pad(v) for k, v in dls1.items()}
+    (u4, v4), (du4, dv4) = jax.jit(lambda a, b: jax.jvp(f4, (a,), (b,)))(lsp, dlsp)
+    ct4 = jax.jit(lambda a, cu, cv: jax.vjp(f4, a)[1]((cu, cv))[0])(lsp, blocks.pad(wu) * real,
+                                                                        blocks.pad(wv) * real)
+    assert _ndiff(blocks.unpad(np.asarray(u4)), u1) == 0 and _ndiff(blocks.unpad(np.asarray(v4)), v1) == 0
+    assert _rel(blocks.unpad(np.asarray(du4)), du1) <= 1e-13 and _rel(blocks.unpad(np.asarray(dv4)), dv1) <= 1e-13
+    for k in ("FORCEX0", "FORCEY0", "uIce", "vIce", "seaiceMassU", "seaiceMassV"):
+        assert np.all(np.isfinite(np.asarray(ct4[k])))
+        assert _rel(blocks.unpad(np.asarray(ct4[k])), ct1[k]) <= 1e-12, k

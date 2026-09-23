@@ -606,8 +606,13 @@ def _precond(ln, L, w, b, unroll=1):
         xn = w * y
         return xn, xn
 
-    _, rows = lax.scan(line, jnp.zeros((n_along, lanes), bl.dtype),
-                       (bl, ln["A"], ln["Rt1"], ln["mask"], ln["bet"], ln["CUU"], ln["B0"]))
+    # the zero first iterate must vary like the lines inside shard_map(check_vma=True) (the carry the scan returns is
+    # tile-varying); typed as bl's mesh axes (none on one device: then nothing changes)
+    x0 = jnp.zeros((n_along, lanes), bl.dtype)
+    vary = tuple(sorted(getattr(getattr(jax.typeof(bl), "mat", None), "varying", frozenset())))
+    if vary:
+        x0 = lax.pcast(x0, vary[0] if len(vary) == 1 else vary, to="varying")
+    _, rows = lax.scan(line, x0, (bl, ln["A"], ln["Rt1"], ln["mask"], ln["bet"], ln["CUU"], ln["B0"]))
     J, I = _interior(L)
     z = jnp.zeros_like(b[0])
     return (z.at[:, J, I].set(_from_lines_u(rows[..., :T], L)), z.at[:, J, I].set(_from_lines_v(rows[..., T:], L)))
