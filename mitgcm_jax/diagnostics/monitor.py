@@ -60,5 +60,37 @@ def format_dynstat(stats, it):
     lines = [f"%MON time_tsnumber = {it}"]
     for name, s in stats.items():
         for k in ("max", "min", "mean", "sd", "del2"):
-            lines.append(f"%MON dynstat_{name}_{k} = {s[k]: .13E}")
+            if k in s:
+                lines.append(f"%MON dynstat_{name}_{k} = {s[k]: .13E}")
     return "\n".join(lines)
+
+
+def dynstat_device(st, g):
+    """On-device version of the dynstat block for run monitoring (min, max, volume-weighted mean and sd over wet
+    points; no del2). jnp sums (tree order): agrees with `dynstat` to ~1e-14, not bitwise. Returns jnp scalars."""
+    import jax.numpy as jnp
+
+    L = g.layout
+    I, J = slice(L.OLx, L.OLx + L.sNx), slice(L.OLy, L.OLy + L.sNy)
+    thickC = g.drF * g.rhoFacC
+    thickF = g.drC[:-1] * g.rhoFacF[:-1]
+
+    def stats(a, h, mask, area, dr):
+        if a.ndim == 3:
+            a, h = a[:, None], h[:, None]
+        a, h = a[..., J, I], h[..., J, I]
+        tm = mask[:, None, J, I] * h
+        on = tm > 0
+        vol = jnp.where(on, area[:, None, J, I] * dr[None, :, None, None] * tm, 0.0)
+        tv = vol.sum()
+        mean = (vol * a).sum() / tv
+        sd = jnp.sqrt((vol * (a - mean) ** 2).sum() / tv)
+        return {"min": jnp.min(jnp.where(on, a, jnp.inf)), "max": jnp.max(jnp.where(on, a, -jnp.inf)),
+                "mean": mean, "sd": sd}
+
+    return {"eta": stats(st.etaN, g.maskInC, g.maskInC, g.rA, g.drF[:1]),
+            "uvel": stats(st.uVel, st.hFacW, g.maskInW, g.rAw, thickC),
+            "vvel": stats(st.vVel, st.hFacS, g.maskInS, g.rAs, thickC),
+            "wvel": stats(st.wVel, g.maskC, g.maskInC, g.rA, thickF),
+            "theta": stats(st.theta, st.hFacC, g.maskInC, g.rA, thickC),
+            "salt": stats(st.salt, st.hFacC, g.maskInC, g.rA, thickC)}
