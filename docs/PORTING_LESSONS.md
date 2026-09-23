@@ -158,3 +158,13 @@ Production runs may use XLA defaults (ulp-level differences only).
   happened only where the sqrt had one user (same code exact in one loop, 1 ulp off in another).
 - Inputs missing from a stage can be rebuilt bitwise when they are pointwise maps of dumped fields
   (recip_hFacW = where(maskW, 1/hFacW, 0), update_r_star.F:76-79).
+
+## Task 16b — tracer integration (2026-09-23, sub-agent)
+- No Adams-Bashforth on T/S in V4r4: with DST3 (scheme 30) all AB flags are F (gad_init_fixed.F:146-165; STDOUT
+  confirms), TEMP_INTEGRATE ends with CYCLE_TRACER; gtNm/gsNm stay 0. Check derived runtime flags in STDOUT
+  (AdamsBashforth_T/Gt, tracForcingOutAB, diffKrNrS) before porting a branch the plan assumed.
+- TRACERS_CORRECTION_STEP does nothing in V4r4 (cAdjFreq=0, no filters).
+- With ALLOW_AUTODIFF, CALC_ADV_FLOW recomputes rTransKp: the tracer k loop vectorises exactly; fVer(kDown) is the kUp
+  array shifted one level.
+- Replaying intermediate dumps localises errors: a 6e-14 T13 error was 1-ulp input differences (algsimp division
+  rewrite) amplified by the implicit solve; the solver fed dumped inputs was bitwise.
