@@ -53,7 +53,7 @@ Check the installation on a GPU node:
 
 ```bash
 python scripts/check_env.py                         # GPU listed, float64 matmul OK, pinned versions: "CHECK OK"
-JAX_PLATFORMS=cpu python -m pytest -m smoke -q      # 19 passed, a few seconds
+JAX_PLATFORMS=cpu python -m pytest -m smoke -q      # 17 passed, a few seconds
 ```
 
 Plots and movies (section 9) use a second environment with [nereus](https://github.com/koldunovn/nereus), cartopy
@@ -450,7 +450,7 @@ of section 2 on an x86_64 front end at `/nobackup/$USER/envs/nereus`.
 **Check** (from the repository root; output in `mitjax_check.o<job id>`):
 
 ```bash
-qsub scripts/cabeus/check_gh200.pbs          # or check_a100.pbs: GPU listed, "CHECK OK", 19 smoke tests passed
+qsub scripts/cabeus/check_gh200.pbs          # or check_a100.pbs: GPU listed, "CHECK OK", 17 smoke tests passed
 ```
 
 **Data.** `scripts/fetch_eccov4r4.py` needs outbound HTTPS to `cmr.earthdata.nasa.gov`, `urs.earthdata.nasa.gov`

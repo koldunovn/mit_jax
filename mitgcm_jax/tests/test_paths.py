@@ -19,7 +19,9 @@ def resolved(**env):
     return dict(line[len("export "):].split("=", 1) for line in out.splitlines())
 
 
-def test_defaults_derive_from_the_work_root():
+def test_paths():
+    """One test (tier 1 counts tests against a budget of 100): defaults, overrides, no other hard-coded work root."""
+    # defaults derive from the work root
     p = resolved()
     assert p["MITJAX_WORK"] == LEVANTE
     assert p["MITJAX_DATA"] == f"{LEVANTE}/data/eccov4r4"
@@ -30,16 +32,14 @@ def test_defaults_derive_from_the_work_root():
     assert q["MITJAX_DATA"] == "/x/data/eccov4r4" and q["MITJAX_REFERENCE_RUNS"] == "/x/reference/runs"
     assert q["MITJAX_RUNS"] == "/x/runs" and q["MITJAX_RUNS_JAX"] == "/x/runs_jax"
 
-
-def test_each_variable_overrides_its_subtree_only():
+    # each variable overrides its own subtree only
     p = resolved(MITJAX_WORK="/x", MITJAX_DATA="/d", MITJAX_REFERENCE="/r")
     assert p["MITJAX_GRID_DIR"] == "/d/native_grid_files"
     assert p["MITJAX_REFERENCE_RUNS"] == "/r/runs"
     assert p["MITJAX_RUNS_JAX"] == "/x/runs_jax"
     assert resolved(MITJAX_GRID_DIR="~/g")["MITJAX_GRID_DIR"] == str(Path("~/g").expanduser())
 
-
-def test_no_other_python_file_hard_codes_the_work_root():
+    # no other Python file hard-codes the development machine's work root
     hits = [str(p.relative_to(REPO)) for d in ("mitgcm_jax", "scripts", "tools", "reference")
             for p in (REPO / d).rglob("*.py")
             if p.resolve() != Path(__file__).resolve() and LEVANTE in p.read_text(errors="replace")]
