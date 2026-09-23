@@ -63,3 +63,9 @@ CUDA runs the forward sweep as one Pallas kernel: whole dynsolver 0.78 / 0.51 / 
 1.18 / 0.78 / 0.58 s (A100-40) at iterations 1 / 2 / 3, still bitwise with the Fortran and with the XLA path (all 32
 outputs, same sweep counts); other GPUs the fully unrolled XLA sweep (1.70 / 1.12 / 0.82 s GH200, 2.87 / 1.89 / 1.39 s
 A100). scripts/runs/lsr_perf_bench.py --full (jobs 27648486, 27648487).
+
+## Acceptance criteria for runs with sea ice (Nikolay, 2026-09-23)
+- Bitwise: CPU with the gate XLA flags vs the Fortran 13 ranks (the full-V4r4 month passes).
+- GPU / production XLA flags: sea-ice exact-zero branches make the runs diverge from the Fortran after a few steps, so
+  the criterion is statistical: every %MON statistic must stay inside the spread of the Fortran itself between tilings
+  (Fortran 96 ranks - Fortran 13 ranks). The full-V4r4 GPU month and year pass with a margin of 10-1000x.

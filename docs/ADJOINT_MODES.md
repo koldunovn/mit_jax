@@ -262,3 +262,10 @@ Tests:
    side-by-side comparison with TAF gradients (M3)?
 5. **Salt plume differs between the trees.** The ff ECCO mode keeps the plume and the full ECCO mode drops it.
    `AdjointConfig.ecco` follows the run's `data.autodiff`.
+
+## Sea-ice derivative at the production LSR tolerance (Nikolay, 2026-09-23: keep current)
+The "full" / "no_dynamics" sea-ice derivatives are the implicit derivative of the converged LSR system (M2.4). At the
+production LSR_ERROR = 2e-4 the Fortran-like forward stops early, so FD of the production model differs from this
+derivative by 1-12 % along ice-dynamics directions (sea-ice window study, docs/ADJOINT_RESULTS.md). Decision: keep the
+implicit derivative (no differentiation through iterations, no tighter production tolerance); FD checks of dynamics
+directions use a converged forward (same code path, tighter LSR_ERROR), stated where used.

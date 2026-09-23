@@ -10,11 +10,13 @@ Groups:
            one-step gate (test_step_fluxforced.py), which is bitwise at every stage and so covers every kernel
     tier1x extended CPU suite (~15 min): per-kernel replay gates, negative controls and gradient-vs-FD checks, data
            re-hash; nightly and whenever a kernel changes (scripts/run_tier1x.sbatch)
+    nightly long CPU suite (~1 h): the full-V4r4 step gates (every stage, free run, 24 steps), the full-tree adjoint
+           modes and the sea-ice multi-step adjoint window (scripts/run_nightly.sbatch; Nikolay 2026-09-23)
     tier2  GPU suite, ~1 h, nightly / milestone
     tier3  milestone climate twins
 """
 
-GROUPS = ("smoke", "tier1", "tier1x", "tier2", "tier3")
+GROUPS = ("smoke", "tier1", "tier1x", "nightly", "tier2", "tier3")
 
 # Tier 1 as run by scripts/run_tier1.sbatch.
 TIER1_EXPRESSION = "smoke or tier1"
@@ -34,12 +36,14 @@ MANIFEST = {
     "mitgcm_jax/tests/test_exchange.py": "tier1",
     "mitgcm_jax/tests/test_fullfield_grad.py": "tier1x",
     "mitgcm_jax/tests/test_gpu_sharding.py": "tier2",
+    "mitgcm_jax/tests/test_adjoint_regression.py": "tier2",
     "mitgcm_jax/tests/test_sharded.py": "tier1",
     "mitgcm_jax/tests/test_sharded_step.py": "tier1x",
     "mitgcm_jax/tests/test_step_fluxforced.py": "tier1",
     "mitgcm_jax/tests/test_grid.py": "tier1",
     "mitgcm_jax/tests/test_monitor_stats.py": "tier1x",
     "mitgcm_jax/tests/test_exf_fluxforced.py": "tier1",
+    "mitgcm_jax/tests/test_exf_full.py": "tier1x",
     "mitgcm_jax/tests/test_grid_load.py": "tier1",
     "mitgcm_jax/tests/test_phi_hyd.py": "tier1x",
     "mitgcm_jax/tests/test_dynamics.py": "tier1x",
@@ -51,6 +55,7 @@ MANIFEST = {
     "mitgcm_jax/tests/test_gmredi.py": "tier1x",
     "mitgcm_jax/tests/test_thermo.py": "tier1x",
     "mitgcm_jax/tests/test_gad.py": "tier1x",
+    "mitgcm_jax/tests/test_seaice_advdiff.py": "tier1x",
     "mitgcm_jax/tests/test_cg2d.py": "tier1x",
     "mitgcm_jax/tests/test_free_surface.py": "tier1x",
     "mitgcm_jax/tests/test_init.py": "tier1",
@@ -62,19 +67,16 @@ MANIFEST = {
     "mitgcm_jax/tests/test_ctrl.py": "tier1x",
     "mitgcm_jax/tests/test_budgets.py": "tier1x",
     "mitgcm_jax/tests/test_means.py": "tier1",
-    "mitgcm_jax/tests/test_adjoint_regression.py": "tier2",
-    "mitgcm_jax/tests/test_seaice_advdiff.py": "tier1x",
     "mitgcm_jax/tests/test_seaice_growth.py": "tier1x",
-    "mitgcm_jax/tests/test_exf_full.py": "tier1x",
     "mitgcm_jax/tests/test_seaice_dyn.py": "tier1x",
-    "mitgcm_jax/tests/test_seaice_lsr_pallas.py": "tier1x",
-    "mitgcm_jax/tests/test_seaice_lsr_gpu.py": "tier2",
     "mitgcm_jax/tests/test_external_forcing_full.py": "tier1x",
     "mitgcm_jax/tests/test_init_full.py": "tier1x",
+    "mitgcm_jax/tests/test_step_full.py": "nightly",
+    "mitgcm_jax/tests/test_adjoint_modes_full.py": "nightly",
     "mitgcm_jax/tests/test_seaice_model.py": "tier1x",
-    "mitgcm_jax/tests/test_step_full.py": "tier1x",
-    "mitgcm_jax/tests/test_adjoint_modes_full.py": "tier1x",
-    "mitgcm_jax/tests/test_seaice_adjoint_window.py": "tier1x",
+    "mitgcm_jax/tests/test_seaice_adjoint_window.py": "nightly",
+    "mitgcm_jax/tests/test_seaice_lsr_pallas.py": "tier1x",
+    "mitgcm_jax/tests/test_seaice_lsr_gpu.py": "tier2",
 }
 
 # Directories searched for test files (must match pyproject testpaths).

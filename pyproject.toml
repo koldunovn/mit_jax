@@ -31,6 +31,7 @@ markers = [
     "smoke: seconds-scale checks, safe to run locally (`pytest -m smoke`)",
     "tier1: fast suite (<10 min on one CPU compute node, every commit)",
     "tier1x: extended CPU suite: kernel replay gates, gradient checks, data re-hash (~15 min)",
+    "nightly: long CPU suite (~1 h): full-V4r4 step gates, full-tree adjoint modes, sea-ice adjoint window",
     "tier2: GPU suite (~1 h, nightly/milestone)",
     "tier3: milestone climate twins",
 ]
