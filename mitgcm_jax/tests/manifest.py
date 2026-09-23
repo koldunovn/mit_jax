@@ -38,6 +38,7 @@ MANIFEST = {
     "mitgcm_jax/tests/test_fullfield_grad.py": "tier1x",
     "mitgcm_jax/tests/test_gpu_sharding.py": "tier2",
     "mitgcm_jax/tests/test_adjoint_regression.py": "tier2",
+    "mitgcm_jax/tests/test_adjoint_regression_full.py": "tier2",
     "mitgcm_jax/tests/test_sharded.py": "tier1",
     "mitgcm_jax/tests/test_sharded_step.py": "tier1x",
     "mitgcm_jax/tests/test_step_fluxforced.py": "tier1",
