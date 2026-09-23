@@ -31,6 +31,7 @@ built with `-ffp-contract=off`) and pass float parameters as traced pytree leave
 | one month on one A100 (default XLA flags) vs Fortran twin | %MON <= 1e-11 rel; SST max 1.2e-7 degC (60,640/60,646 float32 equal) |
 | production config on one A100 from the pickup vs Fortran 96 ranks, one month | every global %MON stat <= 4e-13 rel |
 | production config on one A100 (FMA, cg2d unroll 5) vs Fortran 13-tile serial, 112 days (2688 steps) | daily global %MON: <= 1.1e-10 rel (most 1e-13); full year pending (Fortran serial year finishes ~20:00) |
+| **production config on one A100, full year 1992 (8760 steps) vs Fortran 96 ranks** | daily global %MON over 365 days: theta/salt <= 1.6e-10 rel (means 3e-14), eta <= 5e-11, u/v <= 4.7e-9, w <= 2.2e-8 (w mean 4e-16 abs); runs_jax/ff_prod_1992_gpu_v2/compare_vs_fortran_mpi96_year.txt |
 | discrete volume / SSH / heat / salt budgets per step (48 steps) | close to round-off: <= 5.4 / 0.8 / 37 / 7.7 floors; Fortran's own steps <= 3.5; negative controls >= 1e4 floors (test_budgets) |
 | Fortran yardsticks | 96-rank twin bitwise; 13-tile vs 96-rank spread 1e-8 after 1 day; 11 steps vs PO.DAAC product T 4e-4 max |
 | sharded: shard_map P=2, P=4 (CPU fake devices) | bitwise == P=1 full step (test_sharded, test_sharded_step) |
