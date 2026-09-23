@@ -217,3 +217,12 @@ Production runs may use XLA defaults (ulp-level differences only).
   routine that feeds it and look for exact structural zeros.
 - Open for Nikolay: add a "recomputed without GGL90" variant?; TAF-like cg2d adjoint tolerance (~1e-7 vs 1e-13) for the
   M3 comparison?; salt-plume adjoint semantics differ between the ff and full trees.
+
+## Task 19 — one month free run vs Fortran (2026-09-23)
+- JAX (CPU, gate flags: no FMA, no algsimp) run for 744 steps (January 1992, flux-forced, useCTRL=F, no geothermal)
+  from the Fortran iteration-1 state: the final T, S, U, V, W (5.3M values each) and Eta are BITWISE equal to the
+  Fortran twin's float32 output at iteration 745, and every hourly %MON dynstat agrees to print precision.
+- JAX on one A100 with default XLA flags (FMA, algsimp): after the same month global %MON stats agree to 1e-14..1e-11
+  relative, SST max |diff| 1.2e-7 degC (60,640 of 60,646 surface float32 values identical) — far inside the
+  Fortran 13-tile vs 96-rank spread (1e-8 after ONE day). 0.35 s/step (96-core Fortran: 0.2 s/step).
+- A per-step host-side monitor (copying the 3-D state) cost more than the GPU step: monitor on device.
