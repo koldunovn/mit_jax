@@ -2,6 +2,7 @@
 """Create a Fortran reference run directory for one ECCO v4r4 tree (plan Task 4).
 
     make_rundir.py TREE LAYOUT NAME --nsteps N [--monitor SECONDS] [--binary PATH] [--set FILE:GROUP:KEY=VALUE ...]
+                   [--pickup-from RUNDIR --niter0 N]    matched restart: start from that run's pickup*.<N> files
 
 TREE = full | ff, LAYOUT = mpi96 | serial13. The directory /work/.../MIT/reference/runs/<NAME> must not exist.
 It gets: the tree's production namelists, the overrides below (every one printed and written to OVERRIDES.txt),
@@ -77,6 +78,8 @@ def main(argv=None):
     ap.add_argument("--binary")
     ap.add_argument("--variant", default="", help="binary variant suffix, e.g. _jaxdump or _gcov")
     ap.add_argument("--set", nargs="*", default=[], help="extra FILE:GROUP:KEY=VALUE overrides")
+    ap.add_argument("--pickup-from", help="run directory whose pickup*.<niter0> files start this run")
+    ap.add_argument("--niter0", type=int)
     a = ap.parse_args(argv)
 
     run = WORK / "reference" / "runs" / a.name
@@ -86,6 +89,10 @@ def main(argv=None):
     overrides = [("data.pkg", "packages", "useECCO", ".FALSE."), ("data.pkg", "packages", "useProfiles", ".FALSE."),
                  ("data.pkg", "packages", "useCAL", ".TRUE."), ("data", "parm03", "nTimeSteps", str(a.nsteps)),
                  ("data", "parm03", "monitorFreq", f"{a.monitor:.1f}")]
+    if (a.pickup_from is None) != (a.niter0 is None):
+        raise SystemExit("--pickup-from and --niter0 go together")
+    if a.pickup_from:
+        overrides.append(("data", "parm03", "nIter0", str(a.niter0)))
     for s in a.set:
         f, g, kv = s.split(":", 2)
         k, v = kv.split("=", 1)
@@ -99,6 +106,8 @@ def main(argv=None):
 
     # resolve every input first, in a throw-away copy of the namelists: a refused run leaves nothing behind
     search = SEARCH + sorted(p for p in DATA.glob("**/") if p.is_dir() and "logs" not in p.parts)
+    if a.pickup_from:  # the source run's pickups take precedence over input_init's pickup.0000000001
+        search = [Path(a.pickup_from)] + search
     with tempfile.TemporaryDirectory() as tmp:
         for name, text in files.items():
             (Path(tmp) / name).write_text(text)

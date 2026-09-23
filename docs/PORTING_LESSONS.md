@@ -58,3 +58,16 @@ One entry per task, written in the same commit as the task. Cite `file:line`; st
   archive stopped at 36.6 GiB with no error, the script treated EOF as completion, and only the sha512 check caught
   it. The downloader now trusts only the server's Content-Range/Length, resumes every short read with a fresh
   authenticated request, and treats HTTP 416 on resume as "already complete"; the checksum still decides.
+
+## Task 5 — dump shim, coverage, matched restart (2026-09-23)
+
+- An observer must be proven invisible: the instrumented build, with dumps off AND on, writes byte-identical state
+  files and %MON to the plain build (gfortran -O3 without fast-math/FMA keeps inserted calls from changing results).
+- `forward_step.F:823` advances `myIter` right after `DYNAMICS`; everything after it (incl. inside
+  `SOLVE_FOR_PRESSURE`, `THERMODYNAMICS`) sees the next iteration. Dump points there pass `myIter-1`, and
+  `instrument.py` asserts the counter update sits where it assumes. Found because stages S06-S14 went missing.
+- `sbatch --export=VAR=1,2` splits at commas: `JAXDUMP_STEPS` accepts `:`.
+- Coverage counters (.gcda) accumulate in the build dir across runs; `GCOV_PREFIX` puts them under each run.
+- The published flux-forced tree cannot read its own pickups (I6 writer override, I5 c66g reader: 403 -> 40). The
+  audit had flagged the asymmetry as a "reader note"; running a restart turned it into a hard failure. Restart
+  itself is bitwise exact on the full tree.
