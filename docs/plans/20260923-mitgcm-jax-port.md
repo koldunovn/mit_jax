@@ -7,7 +7,7 @@
 - Goal beyond "MITgcm on GPU": a technically better adjoint than TAF — no hand-written adjoint communication, flexible
   checkpointing without store directives — shown by measurement, not assumed.
 - **First big success (M1+M2):** one year of full V4r4 forward inside the Fortran run-to-run spread, AND a validated
-  sharded JAX gradient over a multi-week window on the real LLC90 grid (acceptance defined in Task 23).
+  sharded JAX gradient over a multi-week window on the real LLC90 grid (acceptance criteria: Tasks 21–22).
 - Design decisions, approved section by section: `docs/brainstorm-20260923.md`. Background: `CATALOG.md`.
 - Revised 2026-09-23 after plan review (flux-forced override audit, Fortran step order, data staging, ecco-mode
   semantics, early AD/sharding gates, task splits).
@@ -94,7 +94,7 @@
 - Create: `~/MIT/.gitignore`, `pyproject.toml`, `constraints.txt`, `mitgcm_jax/__init__.py`, `docs/PORTING_LESSONS.md`, `docs/ENV.md`, `CLAUDE.md`, `scripts/run_tier1.sbatch`
 - Create: `mitgcm_jax/tests/test_env.py`, `mitgcm_jax/tests/test_manifest.py`
 
-- [ ] `git init ~/MIT`; `.gitignore` excludes clones (`MITgcm_c66g/`, `ECCO*/`, `verification_other*`), `work`, handoffs, data
+- [x] `git init ~/MIT`; `.gitignore` excludes clones (`MITgcm_c66g/`, `ECCO*/`, `verification_other*`), `work`, handoffs, data
 - [ ] env `mitgcm-jax` pinned to fesom-jax known-good set; versions in `docs/ENV.md`
 - [ ] `CLAUDE.md` with project rules (literal port, file:line, namelist/OPTIONS over defaults, AD rules, storage, no deletes, no login-node runs)
 - [ ] `run_tier1.sbatch` (compute node, unique OUT_DIR, non-zero exit if any test fails — checked by parsing the pytest summary, not only the exit code)
