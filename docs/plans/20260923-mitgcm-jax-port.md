@@ -339,9 +339,9 @@ compare outputs), so no task waits for a later package; full-step gates start in
 **Files:**
 - Create: `scripts/runs/gpu_sharding.sbatch`, `mitgcm_jax/tests/test_gpu_sharding.py` (tier 2)
 
-- [ ] measure GPU floor: two identical 1-GPU runs
-- [ ] 1 vs 4 A100 forward within that floor; full-step sharded gradient == 1-GPU gradient within floor
-- [ ] run tier 2 — must pass before Task 21
+- [x] measure GPU floor: two identical 1-GPU runs — bitwise (0) over 24 steps
+- [x] 1 vs 4 A100 forward within that floor; full-step sharded gradient == 1-GPU gradient within floor — forward bitwise (0) after 24 steps; gradient 1.5e-11 (repeat floor ~4e-11); 0.43 vs 0.34 s/step
+- [x] run tier 2 — must pass before Task 21 — job 27640194 (test_gpu_sharding.py)
 
 ### Task 21: Multi-week gradient on LLC90 (M1 adjoint acceptance)
 **Files:**

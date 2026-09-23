@@ -273,3 +273,9 @@ Production runs may use XLA defaults (ulp-level differences only).
   (6-step chunks) 21 s, device flat ~33 GB + 1.9 GB host per boundary. ~0.69 GB per stored step: step schedule fits
   ~3 days, sqrt ~60 days (extrapolated), chunked any length.
 - GPU gradient repeats differ by up to 4e-11 relative (J bitwise); source not yet found (M3 item).
+
+## Task 20 — GPU sharding (2026-09-23)
+- 4x A100-80 (one node): two 1-GPU runs bitwise identical over 24 steps (floor 0); the 4-GPU tile-sharded run is
+  bitwise identical to the 1-GPU run on every field after 24 steps; the sharded gradient agrees to 1.5e-11 (GPU
+  gradient repeat floor ~4e-11). 4 GPUs are slower (0.43 vs 0.34 s/step): LLC90 (13 tiles) is too small to scale;
+  the sequential cg2d sums dominate (sum_unroll not set in this run).
