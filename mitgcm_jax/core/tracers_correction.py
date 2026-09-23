@@ -11,7 +11,10 @@ No exchange is called. `TracersCorrectionParams.from_namelists` raises NotImplem
 
 from dataclasses import dataclass
 
+from mitgcm_jax.params_io import params_pytree
 
+
+@params_pytree
 @dataclass(frozen=True)
 class TracersCorrectionParams:
     cAdjFreq: float = 0.0

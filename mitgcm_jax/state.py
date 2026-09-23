@@ -28,7 +28,9 @@ S00_FIELDS = ["uVel", "vVel", "wVel", "theta", "salt", "etaN", "etaH", "dEtaHdt"
               "rhoInSitu", "IVDConvCount", "hMixLayer", "totPhiHyd", "phiHydLow",
               "surfaceForcingU", "surfaceForcingV", "surfaceForcingT", "surfaceForcingS", "fu", "fv", "Qnet", "Qsw",
               "EmPmR", "saltFlux", "pLoad", "phi0surf", "sIceLoad", "saltPlumeDepth", "saltPlumeFlux",
-              "aW2d", "aS2d", "aC2d", "pW", "pS", "pC"]
+              "aW2d", "aS2d", "aC2d", "pW", "pS", "pC",
+              # EXF_FIELDS (group x): carried, their halos keep fldConst / exchanged values between steps
+              "ustress", "vstress", "hflux", "sflux", "swflux", "apressure", "saltflx", "spflx"]
 # G00_geometry group R + recip_hFacW/S (time-dependent under z*)
 G00_STATE_FIELDS = ["rStarFacNm1C", "rStarFacNm1W", "rStarFacNm1S", "rStarExpC", "rStarExpW", "rStarExpS",
                     "rStarDhCDt", "rStarDhWDt", "rStarDhSDt", "pStarFacK", "etaHnm1", "hFac_surfC", "hFac_surfW",
