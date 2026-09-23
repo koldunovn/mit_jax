@@ -5,6 +5,8 @@ Each ECCO switch changes the reverse pass where its physics is active and nowher
     ggl90="frozen", salt_plume="off" against the exact mode: the GM/Redi tensor, the GGL90 outputs and the
     saltPlumeFlux path lose their derivatives exactly (structural zeros), rhoInSitu keeps its derivative bitwise,
     the forward outputs are bitwise equal.
+  - gm_sigma="gm_only" (not a TAF mode): only the GM/Redi slopes are cut; GGL90's N^2 derivative stays (bitwise the
+    exact GGL90 path), which "stable" cuts.
   - MOM_VECINV with the viscFacInAd seam (forward_step.mom_vecinv_adj): factor 1 gives the exact gradient bitwise,
     factor 2 gives a different gradient, equal to plain autodiff of MOM_VECINV at the viscosities of MOM_CALC_VISC
     with viscFacAdj = 2 (the TAF recomputation); the forward is bitwise the exact one.
@@ -110,6 +112,39 @@ def test_oceanic_phys_seams(run):
     assert nz["rho"]["theta"] > 100_000
     for k in PHYS_IN:
         np.testing.assert_array_equal(ge[k], gc[k], err_msg=k)
+
+
+def test_gm_only_seam(run):
+    """gm_sigma="gm_only" (not a TAF mode; the fesom_jax freeze_gm_slope analogue), GGL90 differentiated: the GM/Redi
+    tensor loses its theta/salt derivative exactly as with "stable", but the GGL90 outputs keep theirs bitwise (the
+    N^2 = sigmaR path into GGL90_CALC stays live), whereas "stable" (TAF's ZERO_ADJ_LOC on sigma for every reader)
+    changes the GGL90 path; forward outputs bitwise equal in all three."""
+    ds, nml, P, g, ex, kLowC, st, exf_in = run
+    f = {k: jnp.asarray(v) for k, v in st.f.items()}
+    x = {k: f[k] for k in PHYS_IN}
+    (vj_exact, fphys), (vj_gmo, _), (vj_stab, _) = (_phys_vjp(ex, EXACT), _phys_vjp(ex, AdjointConfig(
+        gm_sigma="gm_only")), _phys_vjp(ex, AdjointConfig(gm_sigma="stable")))
+    shapes = jax.eval_shape(fphys, x, f, P, g, kLowC)
+
+    def ct_for(keys):
+        return {k: (jnp.ones if k in keys else jnp.zeros)(s.shape, s.dtype) for k, s in shapes.items()}
+
+    ct = ct_for(CT_SETS["gm"])
+    oe, ge = vj_exact(x, f, P, g, kLowC, ct)
+    og, gg = vj_gmo(x, f, P, g, kLowC, ct)
+    for k in PHYS_OUT:
+        np.testing.assert_array_equal(np.asarray(oe[k]), np.asarray(og[k]), err_msg=k)
+    assert np.count_nonzero(np.asarray(ge["theta"])) > 100_000
+    assert not np.any(np.asarray(gg["theta"])) and not np.any(np.asarray(gg["salt"]))
+    ct = ct_for(CT_SETS["ggl"])
+    _, ge = vj_exact(x, f, P, g, kLowC, ct)
+    _, gg = vj_gmo(x, f, P, g, kLowC, ct)
+    _, gs = vj_stab(x, f, P, g, kLowC, ct)
+    for k in PHYS_IN:
+        assert np.all(np.isfinite(np.asarray(gg[k]))), k
+        np.testing.assert_array_equal(np.asarray(ge[k]), np.asarray(gg[k]), err_msg=k)
+    d = np.abs(np.asarray(gs["theta"]) - np.asarray(ge["theta"]))
+    assert np.count_nonzero(d) > 10_000, np.count_nonzero(d)   # "stable" cuts GGL90's N^2 derivative, "gm_only" not
 
 
 def test_visc_fac_in_ad(run):

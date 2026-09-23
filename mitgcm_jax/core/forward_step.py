@@ -91,13 +91,17 @@ def do_oceanic_phys(P, g, ex, f, kLowC, adj=EXACT):
     # ADJOINT SEAM gm_sigma="stable": :900-907 ZERO_ADJ_LOC(sigmaX/Y/R) (GMREDI_WITH_STABLE_ADJOINT) cuts the adjoint
     # of the density gradients for every reader (GGL90_CALC, GMREDI_CALC_TENSOR; CALC_IVDC's flag and
     # CALC_OCE_MXLAYER carry no derivative); rhoInSitu keeps its derivative
-    sigX, sigY, sigR = stop_gradient_if(adj.gm_sigma == "stable", r["sigmaX"], r["sigmaY"], r["sigmaR"])
+    sigX, sigY, sigR = stop_gradient_if(adj.gm_sigma in ("stable", "gm_only"), r["sigmaX"], r["sigmaY"],
+                                        r["sigmaR"])
+    # ADJOINT SEAM gm_sigma="gm_only" (not a TAF mode, adjoint/modes.py): only the GM/Redi slopes are cut; GGL90_CALC
+    # keeps the derivative of its N^2 (sigmaR)
+    sigR_ggl = r["sigmaR"] if adj.gm_sigma == "gm_only" else sigR
     # :949 SALT_PLUME_CALC_DEPTH (saltPlumeDepth was zeroed at :292)
     out["saltPlumeDepth"] = stop_gradient_if(  # ADJOINT SEAM salt_plume="off" (:948-951 skipped in the reverse)
         adj.salt_plume == "off",
         sp_mod.salt_plume_calc_depth(P.sp, P.rs.eos, g, r["rhoInSitu"][:, 0], f["theta"], f["salt"], kLowC))
     # :1063 GGL90_CALC (viscArU/V, diffKr zeroed at :661-667; the kernel returns zeros outside its loops)
-    tke, vU, vV, dK = ggl_mod.ggl90_calc(P.ggl, g, f["GGL90TKE"], f["uVel"], f["vVel"], sigR,
+    tke, vU, vV, dK = ggl_mod.ggl90_calc(P.ggl, g, f["GGL90TKE"], f["uVel"], f["vVel"], sigR_ggl,
                                          sfo["surfaceForcingU"], sfo["surfaceForcingV"], f["recip_hFacC"])
     # ADJOINT SEAM ggl90="frozen" (useGGL90inAdMode=F): no derivative through GGL90_CALC; the implicit solves keep
     # the forward kappaRk / kappaRU / kappaRV (TAF STOREs them after the GGL90 terms: docs/ADJOINT_MODES.md)

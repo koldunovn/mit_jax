@@ -66,11 +66,12 @@ def _census(run, adj):
 
 
 def test_seam_census(run):
-    """stop_gradient seams: gm_sigma 3 (sigmaX/Y/R), ggl90 4 (TKE, viscArU/V, diffKr), cg2d 3 (aW2d, aS2d, aC2d),
+    """stop_gradient seams: gm_sigma 3 (sigmaX/Y/R; "stable" and "gm_only" alike), ggl90 4 (TKE, viscArU/V, diffKr), cg2d 3 (aW2d, aS2d, aC2d),
     salt_plume 2 (saltPlumeFlux, saltPlumeDepth); visc_fac_in_ad: 1 custom_jvp_call (MOM_VECINV)."""
     sg0, cj0 = _census(run, AdjointConfig())
     assert cj0 == 1   # the CG2D implicit derivative (core/cg2d.py _cg2d_implicit, custom_jvp since plan Task 18)
-    expect = {AdjointConfig(gm_sigma="stable"): (3, 0), AdjointConfig(ggl90="frozen"): (4, 0),
+    expect = {AdjointConfig(gm_sigma="stable"): (3, 0), AdjointConfig(gm_sigma="gm_only"): (3, 0),
+              AdjointConfig(ggl90="frozen"): (4, 0),
               AdjointConfig(cg2d="passive"): (3, 0), AdjointConfig(salt_plume="off"): (2, 0),
               AdjointConfig(visc_fac_in_ad=1.0): (0, 1), AdjointConfig.ecco(run[1]): (10, 1), ALL_ON: (12, 1)}
     for adj, (dsg, dcj) in expect.items():

@@ -18,10 +18,16 @@ Switches (value in the ECCO mode of the V4r4 flux-forced build; each seam sits i
               diffusion/viscosity uses the forward (GGL90-inclusive) coefficients, and no derivative reaches the TKE or
               the coefficients' state dependence. JAX: lax.stop_gradient on the four GGL90_CALC outputs (GGL90TKE,
               GGL90viscArU/V, GGL90diffKr).
-  gm_sigma    "exact" | "stable"   ecco: "stable" (GMREDI_WITH_STABLE_ADJOINT, flux-forced GMREDI_OPTIONS.h:21: TAF's
+  gm_sigma    "exact" | "stable" | "gm_only"   ecco: "stable" (GMREDI_WITH_STABLE_ADJOINT, flux-forced GMREDI_OPTIONS.h:21: TAF's
               ZERO_ADJ_LOC on sigmaX/Y/R, ff do_oceanic_phys.F:900-907). JAX: lax.stop_gradient on sigmaX/Y/R after
               GRAD_SIGMA, before every reader (GGL90_CALC reads sigmaR too, ggl90_calc.F:218-219); rhoInSitu keeps its
               derivative. CALC_IVDC's step function has no derivative in either mode.
+              "gm_only" (NOT a TAF mode; added 2026-09-23 at Nikolay's request, the fesom_jax `freeze_gm_slope`
+              analogue): lax.stop_gradient on sigmaX/Y/R only where they enter GMREDI_CALC_TENSOR, i.e. only the
+              isopycnal slopes (and their taper) lose their dependence on the density field (the 1/N^2 amplifier;
+              Forget et al. 2015: "omitting only the parametric dependency of isopycnal slopes on the ocean density
+              field"); GGL90_CALC keeps the derivative of its N^2 (sigmaR) unless ggl90="frozen". The dependence of
+              the GM/Redi transports on kapGM/kapRedi stays. `ecco()` never selects it.
   salt_plume  "exact" | "off"      ecco (flux-forced): "exact" (useSALT_PLUMEinAdMode = .TRUE.). "off" is the full-V4r4
               setting (useSALT_PLUMEinAdMode = .FALSE.): every IF (useSALT_PLUME) block is skipped in the reverse
               sweep (SALT_PLUME_DO_EXCH, SALT_PLUME_FORCING_SURF, SALT_PLUME_CALC_DEPTH, SALT_PLUME_TENDENCY_APPLY_S),
@@ -58,7 +64,7 @@ from jax import lax
 # flux-forced/code/GMREDI_OPTIONS.h:21  #define GMREDI_WITH_STABLE_ADJOINT  (ZERO_ADJ_LOC on sigmaX/Y/R in the adjoint)
 GMREDI_WITH_STABLE_ADJOINT = True
 
-_CHOICES = {"ggl90": ("exact", "frozen"), "gm_sigma": ("exact", "stable"), "salt_plume": ("exact", "off"),
+_CHOICES = {"ggl90": ("exact", "frozen"), "gm_sigma": ("exact", "stable", "gm_only"), "salt_plume": ("exact", "off"),
             "cg2d": ("exact", "passive")}
 
 

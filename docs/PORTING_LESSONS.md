@@ -393,3 +393,9 @@ Production runs may use XLA defaults (ulp-level differences only).
 - Reading dump headers in parallel threads: full-oracle index 110 s -> 3 s (DumpSet).
 - Open for Nikolay: keep the diagnostic-only hMixLayer/FIND_ALPHA in the production step (literal) or skip it
   (deviation); tree detection via spflxfile in data.exf (stand-in for READIN_SALT_PLUME_FLUX).
+
+## gm_sigma="gm_only" adjoint switch (2026-09-23)
+- Nikolay asked for the fesom_jax `freeze_gm_slope` analogue "for completeness": stop_gradient on sigmaX/Y/R only
+  where they enter GMREDI_CALC_TENSOR; GGL90_CALC keeps its N^2 derivative. Not a TAF mode (TAF's ZERO_ADJ_LOC in
+  GMREDI_WITH_STABLE_ADJOINT cuts sigma for every reader = "stable"); ecco() never selects it. Effect test: GM path
+  exactly 0, GGL90 path bitwise the exact one, "stable" differs there; forward bitwise.
