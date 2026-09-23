@@ -5,8 +5,8 @@
                               [--frame-every 6] [--monitor-every 1] [--snapshot-every 24]
 
 RUNDIR: a Fortran run directory with the namelists and linked inputs (forcing files) of the configuration to run.
-Initial state: the Fortran oracle's state at the start of iteration --init-it (S00_begin dump; the port of the
-pickup/initialisation, plan Task 8, replaces this). OUTDIR (new) gets:
+Initial state: --init-oracle pickup = built from the run directory's pickup like the Fortran initialisation
+(mitgcm_jax/init.py, incl. the useCTRL=T control adjustments); or an oracle name = its S00_begin dump at --init-it. OUTDIR (new) gets:
   frames/frame_<n>.npz   sst (compact 1170x90), eta, iter, date   -> tools/animate_globe.py (nereus env)
   monitor.txt            %MON dynstat lines in the Fortran format (compare with STDOUT.0000)
   snap_<iter>.npz        theta, salt, etaN (compact, float32) every --snapshot-every steps (dumpFreq twin)
@@ -54,7 +54,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("outdir")
     ap.add_argument("--rundir", required=True)
-    ap.add_argument("--init-oracle")
+    ap.add_argument("--init-oracle", help="oracle name (start from its S00 dump) or 'pickup' (Fortran-free start)")
     ap.add_argument("--init-it", type=int, default=1)
     ap.add_argument("--nsteps", type=int, required=True)
     ap.add_argument("--frame-every", type=int, default=6)
@@ -94,6 +94,11 @@ def main(argv=None):
         for it in range(nIter0, a.init_it):
             loader.load(*exf_mod.model_time(nml, it - nIter0 + 1))
         say(f"restart from {a.restart} at it={a.init_it}")
+    elif a.init_oracle == "pickup":
+        from mitgcm_jax.init import state_from_pickup   # plan Task 8/8b: from the run dir's pickup (+ ctrl)
+        st = state_from_pickup(P, g, ex, kLowC, rundir)
+        a.init_it = int(st.it)
+        st = State({k: jax.numpy.asarray(v) for k, v in st.f.items()}, jax.numpy.asarray(a.init_it))
     else:
         ds = oracle.dumpset(a.init_oracle)
         st = state_from_dump(ds, a.init_it)
