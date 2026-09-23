@@ -399,3 +399,22 @@ Production runs may use XLA defaults (ulp-level differences only).
   where they enter GMREDI_CALC_TENSOR; GGL90_CALC keeps its N^2 derivative. Not a TAF mode (TAF's ZERO_ADJ_LOC in
   GMREDI_WITH_STABLE_ADJOINT cuts sigma for every reader = "stable"); ecco() never selects it. Effect test: GM path
   exactly 0, GGL90 path bitwise the exact one, "stable" differs there; forward bitwise.
+
+## M2.6b-1 — SEAICE_MODEL driver, fixed sea-ice fields, shared libm, sea-ice adjoint levels (2026-09-23, sub-agent)
+- The whole SEAICE_MODEL (wind exchange, DYNSOLVER incl. clipping, ADVDIFF, REG_RIDGE, GROWTH, post-growth
+  exchanges), chained 1->2->3 on its own state with grid + fixed fields from the files, is bitwise vs full_jaxdump_v5
+  at I00-I04 and P00, halos included (only the unread uice_fd/vice_fd: 1 ulp).
+- seaiceMaskU/V are static in V4r4: the per-step recomputation sits inside `#ifndef ALLOW_AUTODIFF_TAMC` — check CPP
+  guards before believing a "recomputed every step" comment. The partly-written DYNSOLVER arrays carry no information
+  across steps (rebuilding them each step is bitwise-identical; tested).
+- One ops/libm.py (full-range glibc exp, libmvec exp, Libm bundles); the EXF copy used to fall back to jnp.exp for
+  small |x|. Every gate stays bitwise.
+- TAF-skipped blocks = identity on overwritten variables, zero on read-only ones (not stop_gradient): a linear
+  custom_jvp (ops/ad_skip.py) gives exact identity/zero VJPs with a byte-identical forward. Levels: ecco (default,
+  all of SEAICE_MODEL), no_dynamics (the SEAICEuseDYNAMICS blocks: FREEDRIFT+LSR, clipping), full.
+- jax caches a trace per function object: re-jitting the same functools.partial after a monkeypatch replays the old
+  trace — negative controls must jit a fresh lambda.
+- The thermodynamics has exact-zero branches (HSNOW > 0): ulp noise under production XLA flags makes 1e-24 m snow
+  and O(10 W/m2) Qnet jumps within one carried step — only gate flags give a bitwise chain; GPU/production twins with
+  sea ice must be compared statistically.
+- Cost on 16 CPU cores: 0.7-1.3 s/step (LSR ~3.8 ms/sweep); gradient ecco/no_dynamics ~1.8 s, full 25 s.

@@ -22,12 +22,13 @@ Split host / device (as the M1 port, pkgs/exf_fluxforced.py, whose calendar and 
   - device (JAX, pure, jit-able): `exf_getforcing(p, g, ex, exf, ff, bufs, facs, theta, myTime, zt, zs)`.
     ExfFullParams is a params_pytree: pass it as a jit argument.
 
-Elementary functions on the device come from a `Libm` bundle. Measured on this CPU: XLA:CPU's log, atan, sin, cos equal
-glibc's bit for bit; its exp differs from glibc's in the last bit for ~14 % of arguments and arccos for ~7 % (glibc
-2.28's exp is the IBM fast path, not correctly rounded). The default `DEVICE_LIBM` therefore uses `exp_glibc`, an
-exact transcription of glibc's exp (FMA variant; fused multiply-adds emulated exactly), and jnp for the rest; only
-zen_fsol_daily (arccos; a diagnostic nothing reads) keeps a round-off difference. The gates also run every kernel
-with glibc's own functions (test-only host callbacks) to show the kernel code itself is literal.
+Elementary functions on the device come from a `Libm` bundle (mitgcm_jax/ops/libm.py). Measured on this CPU: XLA:CPU's
+log, atan, sin, cos equal glibc's bit for bit; its exp differs from glibc's in the last bit for ~14 % of arguments and
+arccos for ~7 % (glibc 2.28's exp is the IBM fast path, not correctly rounded). The default `DEVICE_LIBM` therefore
+uses `exp_glibc` (= ops.libm.glibc_exp), an exact transcription of glibc's exp (FMA variant; fused multiply-adds
+emulated exactly), and jnp for the rest; only zen_fsol_daily (arccos; a diagnostic nothing reads) keeps a round-off
+difference. The gates also run every kernel with glibc's own functions (test-only host callbacks) to show the kernel
+code itself is literal.
 
 Not ported (dead in this configuration, nothing downstream reads them): EXF_GETCLIM and the SST/SSS maps of
 EXF_MAPFIELDS (only FORCING_SURF_RELAX reads them; climsst/sssTauRelax = 0), EXF_CHECK_RANGE (useExfCheckRange = F),
@@ -36,20 +37,15 @@ with no gentim2d control; EXF_GETSURFACEFLUXES's rotated tmpUX/tmpVY = 0) are x 
 Any namelist setting that would activate an unported branch raises NotImplementedError in ExfFullParams.
 """
 
-import base64
-import decimal
-import functools
 import logging
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, NamedTuple
 
 import numpy as np
-import jax
 import jax.numpy as jnp
-from jax import lax
 
+from mitgcm_jax.ops import libm as _libm
 from mitgcm_jax.params_io import params_pytree
 from mitgcm_jax.pkgs.exf_fluxforced import (
     SECONDS_PER_DAY, SECONDS_PER_HOUR, SECONDS_PER_MINUTE, N_MONTH_YEAR, Calendar, FieldRec, UNSET_RL, _fint, _idiv,
@@ -649,220 +645,16 @@ def zenith_time(p, myTime, myIter):
 # Device side (JAX)
 # =====================================================================================================================
 # ---------------------------------------------------------------------------------------------------------------------
-# exp as the gfortran binary computes it: glibc 2.28 (RHEL 8) x86_64 __exp, FMA variant (IFUNC-selected on the
-# AVX2/FMA nodes), main path for 0x3ff0a2b1 < |x|.hi <= 0x40862001 (1.0397 < |x| <= 708.4). This is the IBM
-# accurate-exp fast path (tables coar/fine of e^t, t on a 2^-18 grid, double-double) without its slow path; the
-# operation sequence below is transcribed from the disassembly of /lib64/libm.so.6 (libm-2.28.so, 0x774b0-0x77594),
-# with every vfmadd/vfnmadd as an exact fused multiply-add. Verified bit for bit against glibc's exp on 1e6 random
-# arguments in that range (XLA's exp differs in the last bit for ~14 %); tests/test_exf_full.py::test_exp_glibc.
-# Outside the range (never reached by the bulk formulae: -cvapor_exp/Tsf is in [-26, -14]) jnp.exp is used.
+# exp as the gfortran binary computes it (glibc 2.28, FMA variant, every path for |x| <= ~708) and the Libm bundles:
+# mitgcm_jax/ops/libm.py (shared with pkgs/seaice_growth.py). Names kept here as aliases. The EXF argument of exp
+# (-cvapor_exp/Tsf, EXF_BULKFORMULAE) lies in [-26, -14], the table path of glibc's exp.
 # ---------------------------------------------------------------------------------------------------------------------
-_EXP_THREE51 = float.fromhex("0x1.8p52")               # libm 0xd3320
-_EXP_LOG2E = float.fromhex("0x1.71547652b82fep0")      # libm 0xde4e0
-_EXP_THREE33 = float.fromhex("0x1.8p34")               # libm 0xfbae0
-_EXP_LN2_1 = float.fromhex("0x1.62e42fefa3800p-1")     # libm 0xfbb00
-_EXP_LN2_2 = float.fromhex("0x1.ef35793c76730p-45")    # libm 0xfbaf8
-_EXP_P3 = float.fromhex("0x1.5555555555a0fp-3")        # libm 0xfbae8
-_EXP_P2 = float.fromhex("0x1.00000000004dcp-1")        # libm 0xfbaf0
-_EXP_HI_LIMITS = (0x3ff0a2b1, 0x40862001)             # libm 0x7722f, 0x77260
-# high parts of coar (356 entries, e^((k-178)/512), libm 0xfa4a0) and fine (512 entries, e^(m/2^18), libm 0xf84a0),
-# float64 little endian; each low part is RN(e^v - hi) (checked for all 868 entries against the library)
-_EXP_HI_B64 = (
-    "AAAAyFma5j8AAADIqaXmPwAAAHT/sOY/AAAAyFq85j8AAADQu8fmPwAAAIQi0+Y/AAAA9I7e5j8AAAAUAermPwAAAPR49eY/AAAAkPYA5z8AAA"
-    "DseQznPwAAAAwDGOc/AAAA8JEj5z8AAACcJi/nPwAAABjBOuc/AAAAYGFG5z8AAAB4B1LnPwAAAGizXec/AAAALGVp5z8AAADQHHXnPwAAAEza"
-    "gOc/AAAAqJ2M5z8AAADsZpjnPwAAABA2pOc/AAAAIAuw5z8AAAAc5rvnPwAAAAjHx+c/AAAA5K3T5z8AAAC4mt/nPwAAAICN6+c/AAAARIb35z"
-    "8AAAAIhQPoPwAAAMyJD+g/AAAAlJQb6D8AAABgpSfoPwAAADi8M+g/AAAAINk/6D8AAAAU/EvoPwAAABwlWOg/AAAAOFRk6D8AAABwiXDoPwAA"
-    "AMTEfOg/AAAAOAaJ6D8AAADMTZXoPwAAAISboeg/AAAAaO+t6D8AAAB4SbroPwAAALSpxug/AAAAIBDT6D8AAADEfN/oPwAAAKDv6+g/AAAAtG"
-    "j46D8AAAAI6ATpPwAAAJxtEek/AAAAePkd6T8AAACYiyrpPwAAAAQkN+k/AAAAvMJD6T8AAADIZ1DpPwAAACQTXek/AAAA3MRp6T8AAADsfHbp"
-    "PwAAAFg7g+k/AAAAKACQ6T8AAABcy5zpPwAAAPScqek/AAAA+HS26T8AAABsU8PpPwAAAEw40Ok/AAAApCPd6T8AAAB0FerpPwAAALwN9+k/AA"
-    "AAgAwE6j8AAADIERHqPwAAAJQdHuo/AAAA6C8r6j8AAADESDjqPwAAADBoReo/AAAAMI5S6j8AAADAul/qPwAAAOjtbOo/AAAAsCd66j8AAAAU"
-    "aIfqPwAAABivlOo/AAAAxPyh6j8AAAAYUa/qPwAAABSsvOo/AAAAxA3K6j8AAAAkdtfqPwAAADzl5Oo/AAAADFvy6j8AAACY1//qPwAAAORaDe"
-    "s/AAAA9OQa6z8AAADIdSjrPwAAAGgNNus/AAAA2KtD6z8AAAAYUVHrPwAAACj9Xus/AAAAFLBs6z8AAADcaXrrPwAAAIAqiOs/AAAACPKV6z8A"
-    "AAB0wKPrPwAAAMiVses/AAAADHK/6z8AAAA8Vc3rPwAAAGA/2+s/AAAAfDDp6z8AAACUKPfrPwAAAKQnBew/AAAAvC0T7D8AAADUOiHsPwAAAP"
-    "hOL+w/AAAAJGo97D8AAABkjEvsPwAAALS1Wew/AAAAGOZn7D8AAACYHXbsPwAAADhchOw/AAAA+KGS7D8AAADc7qDsPwAAAOhCr+w/AAAAIJ69"
-    "7D8AAACIAMzsPwAAACBq2uw/AAAA8Nro7D8AAAD8UvfsPwAAAEjSBe0/AAAA0FgU7T8AAACg5iLtPwAAALh7Me0/AAAAHBhA7T8AAADQu07tPw"
-    "AAANxmXe0/AAAAOBls7T8AAAD00nrtPwAAAAyUie0/AAAAiFyY7T8AAABsLKftPwAAALgDtu0/AAAAcOLE7T8AAACcyNPtPwAAADy24u0/AAAA"
-    "VKvx7T8AAADopwDuPwAAAPyrD+4/AAAAlLce7j8AAAC0yi3uPwAAAGDlPO4/AAAAnAdM7j8AAABoMVvuPwAAAMxiau4/AAAAzJt57j8AAABs3I"
-    "juPwAAAKwkmO4/AAAAkHSn7j8AAAAgzLbuPwAAAGArxu4/AAAATJLV7j8AAADwAOXuPwAAAFB39O4/AAAAbPUD7z8AAABIexPvPwAAAOgII+8/"
-    "AAAAUJ4y7z8AAACIO0LvPwAAAIzgUe8/AAAAaI1h7z8AAAAcQnHvPwAAAKz+gO8/AAAAHMOQ7z8AAABwj6DvPwAAAKxjsO8/AAAA1D/A7z8AAA"
-    "DwI9DvPwAAAPwP4O8/AAAAAATw7z8AAAAAAADwPwAAAAACCPA/AAAABAgQ8D8AAAAIEhjwPwAAABQgIPA/AAAAKDIo8D8AAABISDDwPwAAAHRi"
-    "OPA/AAAArIBA8D8AAAD0okjwPwAAAFDJUPA/AAAAwPNY8D8AAABEImHwPwAAAOBUafA/AAAAmItx8D8AAABsxnnwPwAAAGAFgvA/AAAAdEiK8D"
-    "8AAACoj5LwPwAAAATbmvA/AAAAhCqj8D8AAAAwfqvwPwAAAATWs/A/AAAABDK88D8AAAA4ksTwPwAAAJj2zPA/AAAALF/V8D8AAAD4y93wPwAA"
-    "APw85vA/AAAAOLLu8D8AAACsK/fwPwAAAGSp//A/AAAAWCsI8T8AAACQsRDxPwAAAAg8GfE/AAAAzMoh8T8AAADUXSrxPwAAACj1MvE/AAAAzJ"
-    "A78T8AAAC8METxPwAAAPzUTPE/AAAAkH1V8T8AAAB8Kl7xPwAAALzbZvE/AAAAWJFv8T8AAABQS3jxPwAAAKQJgfE/AAAAWMyJ8T8AAABwk5Lx"
-    "PwAAAOxem/E/AAAA0C6k8T8AAAAcA63xPwAAANTbtfE/AAAA+Li+8T8AAACMmsfxPwAAAJSA0PE/AAAAEGvZ8T8AAAAAWuLxPwAAAGhN6/E/AA"
-    "AAUEX08T8AAACwQf3xPwAAAJBCBvI/AAAA9EcP8j8AAADYURjyPwAAAERgIfI/AAAAPHMq8j8AAAC4ijPyPwAAAMSmPPI/AAAAYMdF8j8AAACQ"
-    "7E7yPwAAAFAWWPI/AAAApERh8j8AAACUd2ryPwAAAByvc/I/AAAAROt88j8AAAAILIbyPwAAAHBxj/I/AAAAfLuY8j8AAAAsCqLyPwAAAIhdq/"
-    "I/AAAAjLW08j8AAAA8Er7yPwAAAKBzx/I/AAAAsNnQ8j8AAAB4RNryPwAAAPiz4/I/AAAALCjt8j8AAAAgofbyPwAAANAeAPM/AAAAQKEJ8z8A"
-    "AABwKBPzPwAAAGi0HPM/AAAAKEUm8z8AAACw2i/zPwAAAAR1OfM/AAAAJBRD8z8AAAAYuEzzPwAAANxgVvM/AAAAeA5g8z8AAADswGnzPwAAAD"
-    "x4c/M/AAAAZDR98z8AAABw9YbzPwAAAFy7kPM/AAAALIaa8z8AAADkVaTzPwAAAIQqrvM/AAAADAS48z8AAACI4sHzPwAAAPDFy/M/AAAAUK7V"
-    "8z8AAACgm9/zPwAAAOyN6fM/AAAAMIXz8z8AAABwgf3zPwAAALCCB/Q/AAAA9IgR9D8AAAA8lBv0PwAAAIikJfQ/AAAA4Lkv9D8AAABE1Dn0Pw"
-    "AAALTzQ/Q/AAAAOBhO9D8AAADQQVj0PwAAAHxwYvQ/AAAAQKRs9D8AAAAg3Xb0PwAAACAbgfQ/AAAAPF6L9D8AAAB8ppX0PwAAAOTzn/Q/AAAA"
-    "cEaq9D8AAAAsnrT0PwAAABD7vvQ/AAAAKF3J9D8AAABwxNP0PwAAAOww3vQ/AAAAoKLo9D8AAACQGfP0PwAAALyV/fQ/AAAAKBcI9T8AAADUnR"
-    "L1PwAAAMQpHfU/AAAA/Lon9T8AAACAUTL1PwAAAFDtPPU/AAAAcI5H9T8AAADgNFL1PwAAAKTgXPU/AAAAwJFn9T8AAAA4SHL1PwAAAAwEffU/"
-    "AAAAPMWH9T8AAADQi5L1PwAAAMhXnfU/AAAAKCmo9T8AAAD0/7L1PwAAACjcvfU/AAAA0L3I9T8AAADopNP1PwAAAHiR3vU/AAAAfIPp9T8AAA"
-    "D8evT1PwAAAPh3//U/AAAAdHoK9j8AAAB0ghX2PwAAAPiPIPY/AAAABKMr9j8AAACcuzb2PwAAAMDZQfY/AAAAdP1M9j8AAADAJlj2PwAAAJxV"
-    "Y/Y/AAAAFIpu9j8AAAAoxHn2PwAAANgDhfY/AAAALEmQ9j8AAAAklJv2PwAAAAAAAPA/AAAAAAQA8D8AAAAACADwPwAAAAAMAPA/AAAAABAA8D"
-    "8AAAAAFADwPwAAAAAYAPA/AAAAABwA8D8AAAAAIADwPwAAAAAkAPA/AAAAACgA8D8AAAAALADwPwAAAAAwAPA/AAAAADQA8D8AAAAAOADwPwAA"
-    "AAA8APA/AAAAAEAA8D8AAAAARADwPwAAAABIAPA/AAAAAEwA8D8AAAAAUADwPwAAAABUAPA/AAAAAFgA8D8AAAAAXADwPwAAAABgAPA/AAAAAG"
-    "QA8D8AAAAAaADwPwAAAABsAPA/AAAAAHAA8D8AAAAAdADwPwAAAAB4APA/AAAAAHwA8D8AAAAEgADwPwAAAASEAPA/AAAABIgA8D8AAAAEjADw"
-    "PwAAAASQAPA/AAAABJQA8D8AAAAEmADwPwAAAAScAPA/AAAABKAA8D8AAAAEpADwPwAAAASoAPA/AAAABKwA8D8AAAAEsADwPwAAAAS0APA/AA"
-    "AABLgA8D8AAAAEvADwPwAAAATAAPA/AAAABMQA8D8AAAAEyADwPwAAAATMAPA/AAAABNAA8D8AAAAE1ADwPwAAAATYAPA/AAAABNwA8D8AAAAI"
-    "4ADwPwAAAAjkAPA/AAAACOgA8D8AAAAI7ADwPwAAAAjwAPA/AAAACPQA8D8AAAAI+ADwPwAAAAj8APA/AAAACAAB8D8AAAAIBAHwPwAAAAgIAf"
-    "A/AAAACAwB8D8AAAAIEAHwPwAAAAgUAfA/AAAACBgB8D8AAAAIHAHwPwAAAAwgAfA/AAAADCQB8D8AAAAMKAHwPwAAAAwsAfA/AAAADDAB8D8A"
-    "AAAMNAHwPwAAAAw4AfA/AAAADDwB8D8AAAAMQAHwPwAAAAxEAfA/AAAADEgB8D8AAAAMTAHwPwAAAAxQAfA/AAAAEFQB8D8AAAAQWAHwPwAAAB"
-    "BcAfA/AAAAEGAB8D8AAAAQZAHwPwAAABBoAfA/AAAAEGwB8D8AAAAQcAHwPwAAABB0AfA/AAAAEHgB8D8AAAAQfAHwPwAAABSAAfA/AAAAFIQB"
-    "8D8AAAAUiAHwPwAAABSMAfA/AAAAFJAB8D8AAAAUlAHwPwAAABSYAfA/AAAAFJwB8D8AAAAUoAHwPwAAABSkAfA/AAAAFKgB8D8AAAAYrAHwPw"
-    "AAABiwAfA/AAAAGLQB8D8AAAAYuAHwPwAAABi8AfA/AAAAGMAB8D8AAAAYxAHwPwAAABjIAfA/AAAAGMwB8D8AAAAc0AHwPwAAABzUAfA/AAAA"
-    "HNgB8D8AAAAc3AHwPwAAABzgAfA/AAAAHOQB8D8AAAAc6AHwPwAAABzsAfA/AAAAIPAB8D8AAAAg9AHwPwAAACD4AfA/AAAAIPwB8D8AAAAgAA"
-    "LwPwAAACAEAvA/AAAAIAgC8D8AAAAgDALwPwAAACQQAvA/AAAAJBQC8D8AAAAkGALwPwAAACQcAvA/AAAAJCAC8D8AAAAkJALwPwAAACQoAvA/"
-    "AAAAJCwC8D8AAAAoMALwPwAAACg0AvA/AAAAKDgC8D8AAAAoPALwPwAAAChAAvA/AAAAKEQC8D8AAAAoSALwPwAAACxMAvA/AAAALFAC8D8AAA"
-    "AsVALwPwAAACxYAvA/AAAALFwC8D8AAAAsYALwPwAAACxkAvA/AAAAMGgC8D8AAAAwbALwPwAAADBwAvA/AAAAMHQC8D8AAAAweALwPwAAADB8"
-    "AvA/AAAANIAC8D8AAAA0hALwPwAAADSIAvA/AAAANIwC8D8AAAA0kALwPwAAADSUAvA/AAAANJgC8D8AAAA4nALwPwAAADigAvA/AAAAOKQC8D"
-    "8AAAA4qALwPwAAADisAvA/AAAAOLAC8D8AAAA8tALwPwAAADy4AvA/AAAAPLwC8D8AAAA8wALwPwAAADzEAvA/AAAAPMgC8D8AAABAzALwPwAA"
-    "AEDQAvA/AAAAQNQC8D8AAABA2ALwPwAAAEDcAvA/AAAAROAC8D8AAABE5ALwPwAAAEToAvA/AAAAROwC8D8AAABE8ALwPwAAAET0AvA/AAAASP"
-    "gC8D8AAABI/ALwPwAAAEgAA/A/AAAASAQD8D8AAABICAPwPwAAAEwMA/A/AAAATBAD8D8AAABMFAPwPwAAAEwYA/A/AAAATBwD8D8AAABQIAPw"
-    "PwAAAFAkA/A/AAAAUCgD8D8AAABQLAPwPwAAAFAwA/A/AAAAVDQD8D8AAABUOAPwPwAAAFQ8A/A/AAAAVEAD8D8AAABURAPwPwAAAFhIA/A/AA"
-    "AAWEwD8D8AAABYUAPwPwAAAFhUA/A/AAAAWFgD8D8AAABcXAPwPwAAAFxgA/A/AAAAXGQD8D8AAABcaAPwPwAAAFxsA/A/AAAAYHAD8D8AAABg"
-    "dAPwPwAAAGB4A/A/AAAAYHwD8D8AAABkgAPwPwAAAGSEA/A/AAAAZIgD8D8AAABkjAPwPwAAAGSQA/A/AAAAaJQD8D8AAABomAPwPwAAAGicA/"
-    "A/AAAAaKAD8D8AAABspAPwPwAAAGyoA/A/AAAAbKwD8D8AAABssAPwPwAAAGy0A/A/AAAAcLgD8D8AAABwvAPwPwAAAHDAA/A/AAAAcMQD8D8A"
-    "AAB0yAPwPwAAAHTMA/A/AAAAdNAD8D8AAAB01APwPwAAAHjYA/A/AAAAeNwD8D8AAAB44APwPwAAAHjkA/A/AAAAfOgD8D8AAAB87APwPwAAAH"
-    "zwA/A/AAAAfPQD8D8AAACA+APwPwAAAID8A/A/AAAAgAAE8D8AAACABATwPwAAAIQIBPA/AAAAhAwE8D8AAACEEATwPwAAAIQUBPA/AAAAiBgE"
-    "8D8AAACIHATwPwAAAIggBPA/AAAAiCQE8D8AAACMKATwPwAAAIwsBPA/AAAAjDAE8D8AAACMNATwPwAAAJA4BPA/AAAAkDwE8D8AAACQQATwPw"
-    "AAAJBEBPA/AAAAlEgE8D8AAACUTATwPwAAAJRQBPA/AAAAlFQE8D8AAACYWATwPwAAAJhcBPA/AAAAmGAE8D8AAACcZATwPwAAAJxoBPA/AAAA"
-    "nGwE8D8AAACccATwPwAAAKB0BPA/AAAAoHgE8D8AAACgfATwPwAAAKSABPA/AAAApIQE8D8AAACkiATwPwAAAKSMBPA/AAAAqJAE8D8AAAColA"
-    "TwPwAAAKiYBPA/AAAArJwE8D8AAACsoATwPwAAAKykBPA/AAAArKgE8D8AAACwrATwPwAAALCwBPA/AAAAsLQE8D8AAAC0uATwPwAAALS8BPA/"
-    "AAAAtMAE8D8AAAC0xATwPwAAALjIBPA/AAAAuMwE8D8AAAC40ATwPwAAALzUBPA/AAAAvNgE8D8AAAC83ATwPwAAAMDgBPA/AAAAwOQE8D8AAA"
-    "DA6ATwPwAAAMDsBPA/AAAAxPAE8D8AAADE9ATwPwAAAMT4BPA/AAAAyPwE8D8AAADIAAXwPwAAAMgEBfA/AAAAzAgF8D8AAADMDAXwPwAAAMwQ"
-    "BfA/AAAA0BQF8D8AAADQGAXwPwAAANAcBfA/AAAA1CAF8D8AAADUJAXwPwAAANQoBfA/AAAA2CwF8D8AAADYMAXwPwAAANg0BfA/AAAA2DgF8D"
-    "8AAADcPAXwPwAAANxABfA/AAAA3EQF8D8AAADgSAXwPwAAAOBMBfA/AAAA4FAF8D8AAADkVAXwPwAAAORYBfA/AAAA5FwF8D8AAADoYAXwPwAA"
-    "AOhkBfA/AAAA6GgF8D8AAADsbAXwPwAAAOxwBfA/AAAA7HQF8D8AAADweAXwPwAAAPB8BfA/AAAA9IAF8D8AAAD0hAXwPwAAAPSIBfA/AAAA+I"
-    "wF8D8AAAD4kAXwPwAAAPiUBfA/AAAA/JgF8D8AAAD8nAXwPwAAAPygBfA/AAAAAKUF8D8AAAAAqQXwPwAAAACtBfA/AAAABLEF8D8AAAAEtQXw"
-    "PwAAAAS5BfA/AAAACL0F8D8AAAAIwQXwPwAAAAzFBfA/AAAADMkF8D8AAAAMzQXwPwAAABDRBfA/AAAAENUF8D8AAAAQ2QXwPwAAABTdBfA/AA"
-    "AAFOEF8D8AAAAU5QXwPwAAABjpBfA/AAAAGO0F8D8AAAAc8QXwPwAAABz1BfA/AAAAHPkF8D8AAAAg/QXwPwAAACABBvA/AAAAIAUG8D8AAAAk"
-    "CQbwPwAAACQNBvA/AAAAKBEG8D8AAAAoFQbwPwAAACgZBvA/AAAALB0G8D8AAAAsIQbwPwAAACwlBvA/AAAAMCkG8D8AAAAwLQbwPwAAADQxBv"
-    "A/AAAANDUG8D8AAAA0OQbwPwAAADg9BvA/AAAAOEEG8D8AAAA8RQbwPwAAADxJBvA/AAAAPE0G8D8AAABAUQbwPwAAAEBVBvA/AAAARFkG8D8A"
-    "AABEXQbwPwAAAERhBvA/AAAASGUG8D8AAABIaQbwPwAAAExtBvA/AAAATHEG8D8AAABMdQbwPwAAAFB5BvA/AAAAUH0G8D8AAABUgQbwPwAAAF"
-    "SFBvA/AAAAVIkG8D8AAABYjQbwPwAAAFiRBvA/AAAAXJUG8D8AAABcmQbwPwAAAFydBvA/AAAAYKEG8D8AAABgpQbwPwAAAGSpBvA/AAAAZK0G"
-    "8D8AAABksQbwPwAAAGi1BvA/AAAAaLkG8D8AAABsvQbwPwAAAGzBBvA/AAAAcMUG8D8AAABwyQbwPwAAAHDNBvA/AAAAdNEG8D8AAAB01QbwPw"
-    "AAAHjZBvA/AAAAeN0G8D8AAAB84QbwPwAAAHzlBvA/AAAAfOkG8D8AAACA7QbwPwAAAIDxBvA/AAAAhPUG8D8AAACE+QbwPwAAAIj9BvA/AAAA"
-    "iAEH8D8AAACIBQfwPwAAAIwJB/A/AAAAjA0H8D8AAACQEQfwPwAAAJAVB/A/AAAAlBkH8D8AAACUHQfwPwAAAJghB/A/AAAAmCUH8D8AAACYKQ"
-    "fwPwAAAJwtB/A/AAAAnDEH8D8AAACgNQfwPwAAAKA5B/A/AAAApD0H8D8AAACkQQfwPwAAAKhFB/A/AAAAqEkH8D8AAACsTQfwPwAAAKxRB/A/"
-    "AAAArFUH8D8AAACwWQfwPwAAALBdB/A/AAAAtGEH8D8AAAC0ZQfwPwAAALhpB/A/AAAAuG0H8D8AAAC8cQfwPwAAALx1B/A/AAAAwHkH8D8AAA"
-    "DAfQfwPwAAAMSBB/A/AAAAxIUH8D8AAADIiQfwPwAAAMiNB/A/AAAAyJEH8D8AAADMlQfwPwAAAMyZB/A/AAAA0J0H8D8AAADQoQfwPwAAANSl"
-    "B/A/AAAA1KkH8D8AAADYrQfwPwAAANixB/A/AAAA3LUH8D8AAADcuQfwPwAAAOC9B/A/AAAA4MEH8D8AAADkxQfwPwAAAOTJB/A/AAAA6M0H8D"
-    "8AAADo0QfwPwAAAOzVB/A/AAAA7NkH8D8AAADw3QfwPwAAAPDhB/A/AAAA9OUH8D8AAAD06QfwPwAAAPjtB/A/AAAA+PEH8D8AAAD89QfwPwAA"
-    "APz5B/A/AAAAAP4H8D8=")
-
-
-@functools.lru_cache(maxsize=None)
-def exp_tables():
-    """(coar[712], fine[1024]) as glibc stores them: hi, lo pairs of e^((k-178)/512) and e^(m/2^18)."""
-    hi = np.frombuffer(base64.b64decode(_EXP_HI_B64), "<f8")
-    ctx = decimal.Context(prec=60)
-
-    def pairs(his, off, scale):
-        out = np.empty(2 * len(his))
-        for k, h in enumerate(his):
-            out[2 * k] = h
-            out[2 * k + 1] = float(ctx.subtract(ctx.exp(ctx.divide(decimal.Decimal(k - off), decimal.Decimal(scale))),
-                                                decimal.Decimal(float(h))))
-        return out
-    return pairs(hi[:356], 178, 512), pairs(hi[356:], 0, 262144)
-
-
-_SPLIT = 134217729.0   # 2^27 + 1 (Veltkamp split)
-
-
-def _two_prod(a, b):
-    """Dekker: a*b = p + e exactly."""
-    p = a * b
-    ca = _SPLIT * a
-    ah = ca - (ca - a)
-    al = a - ah
-    cb = _SPLIT * b
-    bh = cb - (cb - b)
-    bl = b - bh
-    return p, ((ah * bh - p) + ah * bl + al * bh) + al * bl
-
-
-def _two_sum(a, b):
-    """Knuth: a+b = s + e exactly."""
-    s = a + b
-    bb = s - a
-    return s, (a - (s - bb)) + (b - bb)
-
-
-def _add_round_to_odd(a, b):
-    s, e = _two_sum(a, b)
-    bits = lax.bitcast_convert_type(s, jnp.int64)
-    away = lax.bitcast_convert_type(jnp.where((e > 0) == (s > 0), bits + 1, bits - 1), jnp.float64)
-    return jnp.where((e == 0) | ((bits & 1) == 1), s, away)
-
-
-def fma(a, b, c):
-    """RN(a*b + c) exactly, without a hardware FMA (Boldo & Melquiond 2008, emulated FMA via round-to-odd); valid
-    without overflow/underflow of the partial results. Needs no FMA contraction/reassociation (gate XLA flags)."""
-    ph, pl = _two_prod(a, b)
-    sh, sl = _two_sum(c, ph)
-    return sh + _add_round_to_odd(pl, sl)
-
-
-def _exp_glibc_main(x):
-    coar, fine = (jnp.asarray(t) for t in exp_tables())
-    y = fma(x, _EXP_LOG2E, _EXP_THREE51)                                                 # 0x774bc
-    bexp = y - _EXP_THREE51                                                             # 0x774d4
-    t = fma(-bexp, _EXP_LN2_1, x)                                                       # 0x774dd
-    y2 = _EXP_THREE33 + t                                                               # 0x774f7
-    base = y2 - _EXP_THREE33                                                            # 0x774fb
-    tb = t - base                                                                       # 0x77515
-    dl = fma(-bexp, _EXP_LN2_2, tb)                                                     # 0x7752a
-    q = fma(dl, _EXP_P3, _EXP_P2)                                                       # 0x7753f
-    eps = fma(dl * dl, q, dl)                                                           # 0x7755f-0x77563
-    n = lax.bitcast_convert_type(y, jnp.int64) & 0xffffffff                            # 0x774d8 low word of y
-    low2 = (lax.bitcast_convert_type(y2, jnp.int64) & 0xffffffff).astype(jnp.uint32).astype(jnp.int32)  # 0x774ff
-    i = jnp.clip(((low2 >> 8) & -2) + 356, 0, 710)                                     # 0x77508-0x77521
-    j = jnp.clip((low2 & 511) * 2, 0, 1022)                                            # 0x7750b-0x77510
-    ci, ci1, fj, fj1 = coar[i], coar[i + 1], fine[j], fine[j + 1]
-    al = ci * fj                                                                        # 0x77574
-    s1 = fma(ci, fj1, fj * ci1)                                                         # 0x77578-0x7757c
-    bet = fma(ci1, fj1, s1)                                                             # 0x77581
-    rem = fma(eps, al, fma(bet, eps, bet))                                              # 0x77586-0x7758b
-    res = rem + al                                                                      # 0x77590
-    nn = n.astype(jnp.int32).astype(jnp.int64)
-    binexp = lax.bitcast_convert_type(jnp.clip(nn + 1023, 1, 2046) << 52, jnp.float64)   # 0x774e6-0x774f2
-    return res * binexp                                                                 # 0x77594
-
-
-@jax.custom_jvp
-def exp_glibc(x):
-    """exp(x) bit-identical to glibc 2.28's (FMA variant) for 1.0397 < |x| <= 708.4, jnp.exp elsewhere."""
-    hiw = (lax.bitcast_convert_type(x, jnp.int64) >> 32) & 0x7fffffff
-    inr = (hiw > _EXP_HI_LIMITS[0]) & (hiw <= _EXP_HI_LIMITS[1])
-    return jnp.where(inr, _exp_glibc_main(jnp.where(inr, x, 2.0)), jnp.exp(x))
-
-
-@exp_glibc.defjvp
-def _exp_glibc_jvp(primals, tangents):
-    (x,), (dx,) = primals, tangents
-    y = exp_glibc(x)
-    return y, y * dx
-
-
-class Libm(NamedTuple):
-    """Elementary functions the device kernels call (the gfortran binary calls glibc for each of them)."""
-    exp: Callable
-    log: Callable
-    atan: Callable
-    sin: Callable
-    cos: Callable
-    acos: Callable
-
-
-# XLA's functions (log, atan, sin, cos equal glibc's here; exp and arccos do not)
-JNP_LIBM = Libm(exp=jnp.exp, log=jnp.log, atan=jnp.arctan, sin=jnp.sin, cos=jnp.cos, acos=jnp.arccos)
-# the kernels' default: XLA's functions with glibc's exp (emulated); arccos (zen_fsol_daily, diagnostic) stays XLA's
-DEVICE_LIBM = JNP_LIBM._replace(exp=exp_glibc)
+exp_glibc = _libm.glibc_exp
+fma = _libm.fma_emulated
+exp_tables = _libm.exp_tables
+Libm = _libm.Libm
+JNP_LIBM = _libm.JNP_LIBM
+DEVICE_LIBM = _libm.DEVICE_LIBM
 
 
 def exf_init_varia(p, layout):

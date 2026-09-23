@@ -14,7 +14,9 @@ seaice_init_varia.F, as executed (buoyancyRelation = 'OCEANIC' -> kSurface = 1, 
   :93-146   k1AtC, k1AtZ, k2AtC, k2AtZ = 0; usingCurvilinearGrid .AND. SEAICEuseMetricTerms: the finite-difference
             metric coefficients (:115-145)                                                    -> `seaice_geometry`
   :253-345  every SEAICE.h array = 0 (full tile), TICES(:, :, 1..nITD) = 0
-  :378-395  seaiceMaskU/V from HEFFM (recomputed by SEAICE_DYNSOLVER every step: not carried)
+  :378-391, :442  seaiceMaskU/V from HEFFM + EXCH_UV_XY_RL(.FALSE.)                       -> `seaice_dyn_masks`
+            (static: the per-step recomputation in SEAICE_DYNSOLVER, seaice_dynsolver.F:141-171, sits inside
+            #ifndef ALLOW_AUTODIFF_TAMC and is compiled out of the V4r4 build)
   :419-437  TICES = 273.0, seaiceMassC/U/V = 1000.0 (full tile, every category)
   :463-466  nIter0 > 0: SEAICE_READ_PICKUP
             seaice_read_pickup.F:68 'pickup_seaice.' // I10.10(nIter0); :76 fp = precFloat64; :85-102 READ_MFLDS_SET,
@@ -27,8 +29,10 @@ seaice_init_varia.F, as executed (buoyancyRelation = 'OCEANIC' -> kSurface = 1, 
   :671-683  ZETA, ETA, PRESS0, ZMAX, ZMIN from HEFF/AREA: overwritten before they are read in every step
             (SEAICE_CALC_ICE_STRENGTH, SEAICE_CALC_VISCOSITIES): not carried
   :685-692  useRealFreshWaterFlux .AND. .NOT.useThSIce: sIceLoad = HEFF*SEAICE_rhoIce + HSNOW*SEAICE_rhoSnow (full tile)
-  :697      SEAICE_tensilFac = 0 (default): no tensileStrFac
+  :697      SEAICE_tensilFac = 0 (default): tensileStrFac keeps 0 from :312                 -> `seaice_dyn_masks`
 The carried sea-ice state: AREA, HEFF, HSNOW, TICES [T, nITD, ny, nx], UICE, VICE; plus the ocean field sIceLoad.
+The partly-written SEAICE_DYNSOLVER arrays (seaiceMassC/U/V = 1000, FORCEX0/Y0, e11, e22, e12, DWATN, FORCEX/Y = 0 at
+this point): pkgs/seaice_model.DYN_CARRY, initial values pkgs/seaice_model.dyn_carry_init.
 """
 
 from dataclasses import dataclass
@@ -46,6 +50,10 @@ PRECFLOAT64 = 64          # EEPARAMS.h precFloat64; seaice_read_pickup.F:76 fp =
 PREC_META = {64: "float64", 32: "float32"}
 ICE_STATE = ("AREA", "HEFF", "HSNOW", "TICES", "UICE", "VICE")
 ICE_GEOMETRY = ("HEFFM", "k1AtC", "k1AtZ", "k2AtC", "k2AtZ")
+ICE_DYN_MASKS = ("seaiceMaskU", "seaiceMaskV", "tensileStrFac")
+# every fixed (set once in SEAICE_INIT_VARIA, never written again) field the sea-ice kernels read: the dict `sg` of
+# pkgs/seaice_dyn.py / seaice_lsr.py / seaice_model.py (seaice_fixed_fields)
+ICE_FIXED = ICE_GEOMETRY + ICE_DYN_MASKS
 
 
 @params_pytree
@@ -136,6 +144,33 @@ def seaice_geometry(g):
     k2AtZ[:, J, If] = (f["recip_dxV"][:, J, If] * (f["dxC"][:, J, If] - f["dxC"][:, Jm, If])
                        * f["recip_dyU"][:, J, If])
     return {"HEFFM": HEFFM, "k1AtC": k1AtC, "k1AtZ": k1AtZ, "k2AtC": k2AtC, "k2AtZ": k2AtZ}
+
+
+def seaice_dyn_masks(g, ex, HEFFM):
+    """seaice_init_varia.F:378-391 (SEAICE_CGRID): seaiceMaskU/V = 0, then 1 where the two HEFFM values around the
+    velocity point sum to more than 1.5, on j = 1-OLy+1..sNy+OLy, i = 1-OLx+1..sNx+OLx (the first halo row/column is
+    not written: it keeps the 0 of the SEAICE.h common block until the exchange); :442
+    EXCH_UV_XY_RL(seaiceMaskU, seaiceMaskV, .FALSE.) (no sign change). tensileStrFac = 0 on the full tile (:312;
+    SEAICE_tensilFac = 0, so :700-712 does not run; SeaiceInitConfig rejects anything else). All three are static
+    (see the module docstring). Returns jnp arrays [T, ny, nx]."""
+    L = g.layout
+    HEFFM = jnp.asarray(HEFFM)
+    J, I = L.js(1 - L.OLy + 1, L.sNy + L.OLy), L.is_(1 - L.OLx + 1, L.sNx + L.OLx)            # :380-383
+    Jm, Im = L.js(1 - L.OLy, L.sNy + L.OLy - 1), L.is_(1 - L.OLx, L.sNx + L.OLx - 1)
+    z = jnp.zeros(L.shape2d)
+    mask_u = HEFFM[:, J, I] + HEFFM[:, J, Im]                                                  # :386
+    seaiceMaskU = z.at[:, J, I].set(jnp.where(mask_u > 1.5, 1.0, 0.0))                         # :384, :387
+    mask_v = HEFFM[:, J, I] + HEFFM[:, Jm, I]                                                  # :388
+    seaiceMaskV = z.at[:, J, I].set(jnp.where(mask_v > 1.5, 1.0, 0.0))                         # :385, :389
+    seaiceMaskU, seaiceMaskV = ex.exch_uv_xy(seaiceMaskU, seaiceMaskV, False)                  # :442
+    return {"seaiceMaskU": seaiceMaskU, "seaiceMaskV": seaiceMaskV, "tensileStrFac": z}      # :312
+
+
+def seaice_fixed_fields(g, ex):
+    """The fixed sea-ice fields the kernels read (ICE_FIXED, the dict `sg`): `seaice_geometry` (HEFFM, k1AtC, k1AtZ,
+    k2AtC, k2AtZ) and `seaice_dyn_masks` (seaiceMaskU/V, tensileStrFac), from the grid alone. jnp arrays."""
+    geo = {k: jnp.asarray(v) for k, v in seaice_geometry(g).items()}
+    return {**geo, **seaice_dyn_masks(g, ex, geo["HEFFM"])}
 
 
 # ---------------------------------------------------------------------------------------------------------------------

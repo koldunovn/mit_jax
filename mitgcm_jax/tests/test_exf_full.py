@@ -7,8 +7,8 @@ Elementary functions. The device kernels take a `Libm` bundle. `GLIBC` (below, t
 sin, cos, acos with glibc through a host callback, i.e. the functions the gfortran binary calls. Measured on this CPU:
 XLA's log/atan/sin/cos equal glibc's bit for bit; its exp differs in the last bit for ~14 % of arguments, arccos for
 ~7 %. The production default `exf_full.DEVICE_LIBM` = jnp functions + `exf_full.exp_glibc` (glibc 2.28's exp, FMA
-variant, transcribed from libm's machine code with exact emulated FMAs): bit-identical to glibc's exp on 1e6 random
-arguments of its main range (test_exp_glibc).
+variant, transcribed from libm's machine code with exact emulated FMAs; mitgcm_jax/ops/libm.py): bit-identical to
+glibc's exp on random arguments of every path (test_exp_glibc).
 
 Gates (all points, halos included, every iteration; replay = each stage fed the dumped inputs of the previous one):
   - records: ExfFullRecordLoader buffers == the X01 'e' group (<f>0, <f>1 of the 10 fields) bitwise; record numbers,
@@ -424,9 +424,11 @@ def test_chain_production_libm(p, g, ex, ds, steps, zs, libm_name):
 
 
 def test_exp_glibc():
-    """exf_full.exp_glibc: its tables are glibc's (libm-2.28.so .rodata); it equals glibc's exp bit for bit on 3e5
-    random arguments of its range (jnp.exp: ~14 % differ, the negative control), falls back to jnp.exp outside, and
-    its derivative is exp."""
+    """exf_full.exp_glibc (= mitgcm_jax.ops.libm.glibc_exp, the full-range transcription shared with SEAICE_GROWTH):
+    its tables are glibc's (libm-2.28.so .rodata); it equals glibc's exp bit for bit on 3e5 random arguments of the
+    table path (jnp.exp: ~14 % differ, the negative control) and on 4e4 small arguments (|x| <= 1.04: accurate-table,
+    polynomial, quadratic and 1 + x paths; before the libm merge this range fell back to jnp.exp), and its derivative
+    is exp."""
     blob = Path("/lib64/libm.so.6").resolve().read_bytes()
     coar, fine = X.exp_tables()
     np.testing.assert_array_equal(coar, np.frombuffer(blob[0xfa4a0:0xfa4a0 + 712 * 8], "<f8"))
@@ -440,8 +442,10 @@ def test_exp_glibc():
     got = np.asarray(jax.jit(X.exp_glibc)(jnp.asarray(x)))
     assert int(np.sum(got != ref)) == 0
     assert np.mean(np.asarray(jax.jit(jnp.exp)(jnp.asarray(x))) != ref) > 0.05
-    small = jnp.asarray(rng.uniform(-1.0, 1.0, 1000))
-    np.testing.assert_array_equal(np.asarray(jax.jit(X.exp_glibc)(small)), np.asarray(jax.jit(jnp.exp)(small)))
+    small = np.concatenate([rng.uniform(-1.04, 1.04, 10000), rng.uniform(-0.0109, 0.0109, 10000),
+                            rng.uniform(-3.8e-6, 3.8e-6, 10000), rng.uniform(-3.7e-9, 3.7e-9, 10000)])
+    ref_small = np.asarray(np.frompyfunc(lib.exp, 1, 1)(small), np.float64)
+    assert int(np.sum(np.asarray(jax.jit(X.exp_glibc)(jnp.asarray(small))) != ref_small)) == 0
     dx = jax.jit(jax.vmap(jax.grad(X.exp_glibc)))(jnp.asarray(x[:1000]))
     np.testing.assert_array_equal(np.asarray(dx), got[:1000])
 

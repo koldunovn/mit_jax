@@ -26,10 +26,10 @@ libmvec `_ZGVbN2v_exp` (glibc's math-vector-fortran.h declares EXP simd for gfor
 SSE4.1 kernel (libmvec-2.28, SVML-derived, ~1-4 ulp) is not libm's exp. Measured on the oracle's PRESS0: glibc scalar
 exp differs at 2978 points, XLA's exp at ~3100, libmvec's vector exp (called through a C shim) at 0. `exp_libmvec`
 below is a transliteration of that kernel (disassembled from /usr/lib64/libmvec.so.1, _ZGVbN2v_exp -> SSE4 variant;
-table = correctly rounded 2^(j/1024), verified equal to the library's) and makes PRESS0/ZMAX bitwise. ATAN2, SQRT
-agree bitwise with glibc. SIN/COS in SEAICE_FREEDRIFT are one glibc `sincos` call (gcc fuses them), whose cos-part can
-differ from cos() by up to 2 ulp; uice_fd/vice_fd are diagnostics in V4r4. The turning-angle SIN/COS (argument 0) are
-exact in every library.
+table = correctly rounded 2^(j/1024), verified equal to the library's; now in mitgcm_jax/ops/libm.py) and makes
+PRESS0/ZMAX bitwise. ATAN2, SQRT agree bitwise with glibc. SIN/COS in SEAICE_FREEDRIFT are one glibc `sincos` call
+(gcc fuses them), whose cos-part can differ from cos() by up to 2 ulp; uice_fd/vice_fd are diagnostics in V4r4. The
+turning-angle SIN/COS (argument 0) are exact in every library.
 
 Arrays: `[tile, j, i]` with halos (layout.py). Grid fields from `Grid`; the sea-ice fields set at initialisation
 (HEFFM, seaiceMaskU/V, tensileStrFac: seaice_init_varia.F:67-74, 384-387, 312/708; k1AtC, k1AtZ, k2AtC, k2AtZ:
@@ -43,11 +43,10 @@ I01), LSOR sweep counts included, except uice_fd/vice_fd (1 ulp at 27-45 points,
 import math
 from dataclasses import dataclass
 
-import jax
 import jax.numpy as jnp
-import numpy as np
-from jax import lax
 
+from mitgcm_jax.ops import libm as _libm
+from mitgcm_jax.ops.ad_skip import skipped_in_reverse
 from mitgcm_jax.params_io import params_pytree
 from mitgcm_jax.pkgs import seaice_lsr as lsr
 
@@ -193,59 +192,9 @@ class SeaiceDynParams:
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# glibc libmvec _ZGVbN2v_exp (SSE4.1 kernel), the EXP gfortran calls in the vectorised SEAICE_CALC_ICE_STRENGTH loop.
-# Constants read from libmvec-2.28's data block (lea 0xb0c3(%rip) -> 0x12c40: table, +0x2000 InvLn2, +0x2040 Shifter,
-# +0x2080 Ln2hi, +0x20c0 Ln2lo, +0x2100 PC1, +0x2140 PC2, +0x2180 PC3, +0x21c0 index mask 0x3ff, +0x2200 abs mask,
-# +0x2240 domain range 0x4086232a).
-_VEXP_InvLn2 = float.fromhex("0x1.71547652b82fep+10")
-_VEXP_Shifter = float.fromhex("0x1.8p+52")
-_VEXP_Ln2hi = float.fromhex("0x1.62e42fec00000p-11")
-_VEXP_Ln2lo = float.fromhex("0x1.d1cf79abc9e3bp-42")
-_VEXP_PC1 = 1.0
-_VEXP_PC2 = float.fromhex("0x1.0000001ebfbe0p-1")
-_VEXP_PC3 = float.fromhex("0x1.5555555555556p-3")
-_VEXP_DOMAIN = 0x4086232A  # |x| above ~708.39: the kernel calls scalar exp for that lane
-
-
-def _vexp_table():
-    from decimal import Decimal, getcontext
-    getcontext().prec = 40
-    ln2 = Decimal(2).ln()
-    return np.array([float((ln2 * j / 1024).exp()) for j in range(1024)])  # correctly rounded 2^(j/1024)
-
-
-_VEXP_TABLE = _vexp_table()
-
-
-@jax.custom_jvp
-def exp_libmvec(x):
-    """exp(x) exactly as glibc-2.28 libmvec _ZGVbN2v_exp (SSE4.1 path) computes it, for |x| < 708.39 (outside that
-    range the library calls scalar exp: here XLA's exp, not bitwise; not reached by the ice strength, |x| <= cStar).
-    Operation order of the kernel: dK = x*InvLn2; dN = roundpd(dK) (nearest-even); dM = Shifter + dK;
-    r = (x - dN*Ln2hi) - dN*Ln2lo; p = (PC3*r + PC2)*r + PC1; q = PC1 + r*p; j = bits(dM) & 0x3ff;
-    result = bits(T[j]*q) + ((bits(dM) & ~0x3ff) << 42) (integer add = scaling by 2^M). Needs no FMA and no algsimp
-    rewriting (conftest XLA flags) to be bitwise."""
-    x = jnp.asarray(x, jnp.float64)
-    dK = x * _VEXP_InvLn2
-    dN = jnp.round(dK)  # roundpd $0: round to nearest even
-    dM = _VEXP_Shifter + dK
-    r = (x - dN * _VEXP_Ln2hi) - dN * _VEXP_Ln2lo
-    p = (_VEXP_PC3 * r + _VEXP_PC2) * r + _VEXP_PC1
-    q = _VEXP_PC1 + r * p
-    bits = lax.bitcast_convert_type(dM, jnp.int64)
-    j = bits & 0x3FF
-    Mbits = lax.shift_left(bits & ~jnp.int64(0x3FF), jnp.int64(42))
-    Tq = jnp.asarray(_VEXP_TABLE)[j] * q
-    res = lax.bitcast_convert_type(lax.bitcast_convert_type(Tq, jnp.int64) + Mbits, jnp.float64)
-    hi = lax.shift_right_logical(lax.bitcast_convert_type(x, jnp.int64), jnp.int64(32)) & 0x7FFFFFFF
-    return jnp.where(hi > _VEXP_DOMAIN, jnp.exp(x), res)
-
-
-@exp_libmvec.defjvp
-def _exp_libmvec_jvp(primals, tangents):
-    (x,), (dx,) = primals, tangents
-    y = exp_libmvec(x)
-    return y, y * dx
+# glibc libmvec _ZGVbN2v_exp (SSE4.1 kernel), the EXP gfortran calls in the vectorised SEAICE_CALC_ICE_STRENGTH loop:
+# mitgcm_jax/ops/libm.py (module global here, so calc_ice_strength looks it up at call time).
+exp_libmvec = _libm.exp_libmvec
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -359,17 +308,69 @@ def ocean_stress(p, g, ex, fu, fv, uIce, vIce, DWATN, AREA, uVel, vVel):
     return ex.exch_uv_xy(fu, fv, True)  # :128
 
 
-def dynsolver(p, g, sg, ex, st, record=False, max_iter=None, lsr_error=None):
+# ---------------------------------------------------------------------------------------------------------------
+# the IF (SEAICEuseDYNAMICS) parts of SEAICE_DYNSOLVER, as separate blocks for the adjoint level "no_dynamics"
+# (SEAICEuseDYNAMICSswitchInAd = .TRUE.: TAF skips exactly these blocks in the reverse sweep, ops/ad_skip.py)
+
+# variables the SEAICEuseDYNAMICS block (seaice_dynsolver.F:270-341) overwrites and that later code reads: uIce, vIce
+# (SEAICE_LSR; read by SEAICE_OCEAN_STRESS, SEAICE_ADVDIFF, the next step), TAUX, TAUY (EXCH_UV_XY_RL in
+# SEAICE_FREEDRIFT), e11, e22, e12, DWATN, FORCEX, FORCEY (SEAICE_LSR writes them only partly: the other points carry
+# over to the next step; DWATN is read by SEAICE_OCEAN_STRESS). Its other results (uIceNm1, vIceNm1, deltaC, ETA,
+# etaZ, ZETA, zetaZ, PRESS, uice_fd, vice_fd) are recomputed from scratch (zeroed first) every time and read by nothing
+# outside the block.
+DYN_BLOCK_INOUT = ("uIce", "vIce", "TAUX", "TAUY", "e11", "e22", "e12", "DWATN", "FORCEX", "FORCEY")
+CLIP_INOUT = ("uIce", "vIce")
+UICE_CLIP = 0.40  # seaice_dynsolver.F:378, :380  MAX(MIN(uIce, 0.40 _d +00), -0.40 _d +00)
+
+
+def dynamics_block(record, max_iter, lsr_error, ins, rest):
+    """seaice_dynsolver.F:270-341, the IF (SEAICEuseDYNAMICS) block: SEAICE_FREEDRIFT (:273-277, LSR_mixIniGuess = 0;
+    SEAICEuseFREEDRIFT = F: :278-291 not executed) and SEAICE_LSR (:313-316); OBCS, EVP, Krylov, JFNK not used.
+    ins: DYN_BLOCK_INOUT + the read-only FORCEX0, FORCEY0, HEFF, uVel, vVel, seaiceMassC/U/V, PRESS0, ZMAX, ZMIN;
+    rest = (p, g, sg, ex). Returns (out, passes): out = seaice_lsr's results + TAUX, TAUY, uice_fd, vice_fd."""
+    p, g, sg, ex = rest
+    TAUX, TAUY, uice_fd, vice_fd = freedrift(p, g, ex, ins["TAUX"], ins["TAUY"], ins["FORCEX0"], ins["FORCEY0"],
+                                             ins["HEFF"], ins["uVel"], ins["vVel"])
+    ls = {k: ins[k] for k in ("uIce", "vIce", "uVel", "vVel", "seaiceMassC", "seaiceMassU", "seaiceMassV", "FORCEX0",
+                              "FORCEY0", "PRESS0", "ZMAX", "ZMIN", "e11", "e22", "e12", "DWATN", "FORCEX", "FORCEY")}
+    lo, passes = lsr.seaice_lsr(p, g, sg, ex, ls, record=record, max_iter=max_iter, lsr_error=lsr_error)
+    return dict(lo, TAUX=TAUX, TAUY=TAUY, uice_fd=uice_fd, vice_fd=vice_fd), passes
+
+
+def clip_block(ins, rest):
+    """seaice_dynsolver.F:365-385 (SEAICE_ALLOW_CLIPVELS, IF (SEAICEuseDYNAMICS .AND. SEAICE_clipVelocities)): ice
+    velocities capped to +-0.40 m/s on the full tile."""
+    uIce = jnp.maximum(jnp.minimum(ins["uIce"], UICE_CLIP), -UICE_CLIP)
+    vIce = jnp.maximum(jnp.minimum(ins["vIce"], UICE_CLIP), -UICE_CLIP)
+    return dict(uIce=uIce, vIce=vIce), None
+
+
+_dynamics_block_skipped = skipped_in_reverse(dynamics_block, DYN_BLOCK_INOUT, n_static=3)
+_clip_block_skipped = skipped_in_reverse(clip_block, CLIP_INOUT)
+AD_DYNAMICS = ("exact", "skip")
+
+
+def dynsolver(p, g, sg, ex, st, record=False, max_iter=None, lsr_error=None, ad_dynamics="exact"):
     """SEAICE_DYNSOLVER (seaice_dynsolver.F:100-387) for one step.
 
     st (the values on entry, [T, ny, nx]): HEFF, AREA, uIce, vIce, uVel, vVel (surface level of DYNVARS uVel/vVel),
     fu, fv (FFIELDS, after EXF); and the arrays the routine writes only partly, as they are on entry (their other
     points keep these values): seaiceMassC/U/V, FORCEX0, FORCEY0, e11, e22, e12, DWATN, FORCEX, FORCEY.
     sg: HEFFM, k1AtC, k1AtZ, k2AtC, k2AtZ, seaiceMaskU, seaiceMaskV, tensileStrFac.
+    ad_dynamics (static; derivatives only, the forward is byte-identical): "exact" = the derivative of everything
+    (implicit LSR derivative, seaice_lsr.py); "skip" = what TAF computes with SEAICEuseDYNAMICSswitchInAd = .TRUE.
+    (autodiff_inadmode_set_ad.F:49-51: SEAICEuseDYNAMICS = .FALSE. in the reverse sweep): the two IF
+    (SEAICEuseDYNAMICS) blocks, `dynamics_block` (:270-341) and `clip_block` (:365-385), are identity maps on the
+    variables they overwrite (DYN_BLOCK_INOUT, CLIP_INOUT) and pass nothing to the ones they only read
+    (ops/ad_skip.py); ice masses, GET_DYNFORCING, FORCEX0/Y0, CALC_ICE_STRENGTH and OCEAN_STRESS keep their exact
+    derivatives (outside the IF, :112-268 and :361).
     Returns (out, rec): out = the groups u, y, v and fu, fv at stage I01_dynsolver (UICE, VICE after clipping,
     seaiceMassC/U/V, TAUX, TAUY, FORCEX0/Y0, PRESS0, ZMAX, ZMIN, uice_fd, vice_fd, e11, e22, e12, deltaC, ETA,
     etaZ, ZETA, zetaZ, PRESS, DWATN, FORCEX, FORCEY, uIceNm1, vIceNm1, stressDivergenceX/Y, fu, fv);
     rec (record=True) = the stage values Y01..Y06 and the per-pass LSR records (seaice_lsr.seaice_lsr)."""
+    if ad_dynamics not in AD_DYNAMICS:
+        raise ValueError(f"ad_dynamics={ad_dynamics!r}: one of {AD_DYNAMICS}")
+    skip = ad_dynamics == "skip"
     L = g.layout
     st = {k: jnp.asarray(v) for k, v in st.items()}
     rec = {}
@@ -387,19 +388,17 @@ def dynsolver(p, g, sg, ex, st, record=False, max_iter=None, lsr_error=None):
     PRESS0, ZMAX, ZMIN = calc_ice_strength(p, st["HEFF"], st["AREA"], sg["HEFFM"])  # :265
     if record:
         rec["Y02"] = dict(FORCEX0=FORCEX0, FORCEY0=FORCEY0, PRESS0=PRESS0, ZMAX=ZMAX, ZMIN=ZMIN)
-    # :273-277 SEAICE_FREEDRIFT (LSR_mixIniGuess = 0)
-    TAUX, TAUY, uice_fd, vice_fd = freedrift(p, g, ex, TAUX, TAUY, FORCEX0, FORCEY0, st["HEFF"],
-                                             st["uVel"], st["vVel"])
-    if record:
-        rec["Y03"] = dict(TAUX=TAUX, TAUY=TAUY, uice_fd=uice_fd, vice_fd=vice_fd)
-    # :313-316 SEAICE_LSR
-    ls = dict(uIce=st["uIce"], vIce=st["vIce"], uVel=st["uVel"], vVel=st["vVel"], seaiceMassC=mC, seaiceMassU=mU,
-              seaiceMassV=mV, FORCEX0=FORCEX0, FORCEY0=FORCEY0, PRESS0=PRESS0, ZMAX=ZMAX, ZMIN=ZMIN,
-              e11=st["e11"], e22=st["e22"], e12=st["e12"], DWATN=st["DWATN"], FORCEX=st["FORCEX"],
-              FORCEY=st["FORCEY"])
-    lo, passes = lsr.seaice_lsr(p, g, sg, ex, ls, record=record, max_iter=max_iter, lsr_error=lsr_error)
+    # :270-341 IF (SEAICEuseDYNAMICS): SEAICE_FREEDRIFT (:273-277) + SEAICE_LSR (:313-316)
+    blk_in = dict(uIce=st["uIce"], vIce=st["vIce"], TAUX=TAUX, TAUY=TAUY, e11=st["e11"], e22=st["e22"],
+                  e12=st["e12"], DWATN=st["DWATN"], FORCEX=st["FORCEX"], FORCEY=st["FORCEY"], FORCEX0=FORCEX0,
+                  FORCEY0=FORCEY0, HEFF=st["HEFF"], uVel=st["uVel"], vVel=st["vVel"], seaiceMassC=mC,
+                  seaiceMassU=mU, seaiceMassV=mV, PRESS0=PRESS0, ZMAX=ZMAX, ZMIN=ZMIN)
+    blk = _dynamics_block_skipped if skip else dynamics_block
+    lo, passes = blk(record, max_iter, lsr_error, blk_in, (p, g, sg, ex))
+    TAUX, TAUY, uice_fd, vice_fd = lo["TAUX"], lo["TAUY"], lo["uice_fd"], lo["vice_fd"]
     uIce, vIce = lo["uIce"], lo["vIce"]
     if record:
+        rec["Y03"] = dict(TAUX=TAUX, TAUY=TAUY, uice_fd=uice_fd, vice_fd=vice_fd)
         rec["passes"] = passes
         rec["Y05"] = dict(UICE=uIce, VICE=vIce)
     fu, fv = ocean_stress(p, g, ex, st["fu"], st["fv"], uIce, vIce, lo["DWATN"], st["AREA"],
@@ -407,8 +406,9 @@ def dynsolver(p, g, sg, ex, st, record=False, max_iter=None, lsr_error=None):
     if record:
         rec["Y06"] = dict(fu=fu, fv=fv)
     if p.SEAICE_clipVelocities:  # :365-385
-        uIce = jnp.maximum(jnp.minimum(uIce, 0.40), -0.40)
-        vIce = jnp.maximum(jnp.minimum(vIce, 0.40), -0.40)
+        clip = _clip_block_skipped if skip else clip_block
+        cl, _ = clip(dict(uIce=uIce, vIce=vIce), None)
+        uIce, vIce = cl["uIce"], cl["vIce"]
     out = dict(UICE=uIce, VICE=vIce, seaiceMassC=mC, seaiceMassU=mU, seaiceMassV=mV, TAUX=TAUX, TAUY=TAUY,
                FORCEX0=FORCEX0, FORCEY0=FORCEY0, PRESS0=PRESS0, ZMAX=ZMAX, ZMIN=ZMIN, uice_fd=uice_fd,
                vice_fd=vice_fd, e11=lo["e11"], e22=lo["e22"], e12=lo["e12"], deltaC=lo["deltaC"], ETA=lo["ETA"],
