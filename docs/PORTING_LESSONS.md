@@ -233,3 +233,27 @@ Production runs may use XLA defaults (ulp-level differences only).
   clean worktree (dev/wt_check, clones symlinked) before trusting it; stage only whole-agent files (blob staging for
   shared files: manifest.py, exchange.py).
 - Tier 1 on HEAD 4455541: 83 passed in 5.7 min (clean worktree).
+
+## Task 7 (sharded) — shard_map over tiles, P=4 == P=1 bitwise (2026-09-23, sub-agent)
+- Tiles in P contiguous blocks, padded with bitwise replicas of tile 1 (finite, never read, dropped). Exchanges from the
+  probed maps: local gathers + greedy-coloured ppermute rounds (K = 0/1/3 at P = 1/2/4); a P=4 step has 69
+  collective-permutes, 9 all-reduces, no all-gather/all-to-all. Full step P=2 and P=4 bitwise == P=1 on 90 fields;
+  cg2d 164 iterations at every P; d/dtheta0 at P=4 within 1.6e-16 of P=1.
+- Global sums = GLOBAL_SUM_ORDER_TILES (global_sum_tile.F:164-194): zero-padded [Tpad] buffer, one psum, ordered sum
+  over tiles 1..13 — exact, P-independent, differentiable (lax.pmax has no JVP: use the same buffer for max).
+- custom_linear_solve in shard_map(check_vma=True): invariants the solves close over must be pcast to varying; aux
+  outputs vary like b; padding must be zeroed in the transpose solve (the padded operator is not symmetric).
+- Hidden cross-tile dependencies were global reductions (calc_r_star counters, cg2d max), per-tile tables keyed by the
+  global tile number (use Grid.tile_index), and shapes from L.nTiles.
+- "Not written by the exchange" != "not read": exch2's corner pass reads open-edge halos (halo-poison sets must exclude them).
+- NFS: a fresh PYTHONPYCACHEPREFIX per run avoids importing a stale .pyc right after an edit.
+
+## Task 8b — production control adjustments (2026-09-23, sub-agent)
+- useCTRL=T initial state and step 1 bitwise vs the production oracle. WC01 = sqrt(recip_rA*recip_drF) * 150
+  pseudo-steps of SMOOTH_DIFF3D (explicit RHS + AB2 + implicit vertical) * norm; divide by sqrt(weight), add, bound,
+  exchange. Bitwise needed the real*4 write/read round trip of the smoothing operators (smoothprec=32) and the model's
+  nIter0 in the smoother's AB2 start (abFac=0 at pseudo-step 2).
+- The forcing controls (xx_qnet ... xx_spflx) are all zero, but CTRL_MAP_FORCING's EXCH_XY_RS(saltFlux) rewrites 1538
+  halo values: an all-zero stage is not automatically an identity.
+- Cost: setup with useCTRL ~160 s + state_from_pickup ~150 s (7 controls x 150 pseudo-steps) — the whole-array gather
+  exchange dominates; a halo-only exchange is the main speed-up.

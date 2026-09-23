@@ -170,11 +170,11 @@
 - Create: `mitgcm_jax/grid/topology.py`, `mitgcm_jax/parallel/{exchange,global_sum}.py`, `mitgcm_jax/tests/test_exchange.py`
 
 - [x] halo map incl. vector swap/sign/shift and exch2 corner passes — ➕ taken from the Fortran exchange routines themselves (index-coded probe in the dump shim, `scripts/make_exch_maps.py`, `mitgcm_jax/data/exch_maps_13x90x90.npz`); bitwise on dumped halos (`mitgcm_jax/tests/test_exchange.py`). A 30x30 map needs a probe run of a 30x30 dump build; `fill_cs_corner*` is ported inside the advection/momentum kernels
-- [ ] `exchange(field, kind)`: gather on 1 device; coloured `ppermute` rounds in `shard_map(check_vma=True)`; exchange call sites and overlap loop bounds ported literally in later tasks
-- [ ] `global_sum`: mirror `global_sum_tile.F` ordering; bit-identical for any P
-- [ ] write tests: halo values equal Fortran halo dumps; adjoint identity scalar+vector; sharded == 1 device; global_sum identical P=1,2,4; halo-poison probe (NaN outside Fortran exchange points ⇒ output unchanged); HLO op-count budget; guard test forbidding `ragged_all_to_all`
-- [ ] write negative controls: dropped sign, wrong transpose, stale halo — each must fail
-- [ ] run tests — tag `m0`
+- [x] `exchange(field, kind)`: gather on 1 device; coloured `ppermute` rounds in `shard_map(check_vma=True)`; exchange call sites and overlap loop bounds ported literally in later tasks — parallel/sharded_exchange.py, shard.py
+- [x] `global_sum`: mirror `global_sum_tile.F` ordering; bit-identical for any P — parallel/global_sum.py (GLOBAL_SUM_ORDER_TILES)
+- [x] write tests: halo values equal Fortran halo dumps; adjoint identity scalar+vector; sharded == 1 device; global_sum identical P=1,2,4; halo-poison probe (NaN outside Fortran exchange points ⇒ output unchanged); HLO op-count budget; guard test forbidding `ragged_all_to_all` — test_exchange.py, test_sharded.py, test_sharded_step.py (HLO budget, ragged guard, halo poison at exchange+GAD level)
+- [x] write negative controls: dropped sign, wrong transpose, stale halo — each must fail
+- [x] run tests — tag `m0`
 
 ➕ **2026-09-23 (session 3) execution note:** kernels of Tasks 6, 9–16b are ported in parallel by sub-agents, each
 gated by replay against the dump shim's stages (`docs/KERNEL_GUIDE.md`); oracles `smoke_ff_jaxdump_v3` (no forcing)
@@ -204,9 +204,9 @@ compare outputs), so no task waits for a later package; full-step gates start in
 
 ### ➕ Task 8b: production control adjustments (useCTRL=T)
 **Files:** `mitgcm_jax/pkgs/{ctrl,smooth}.py`, `mitgcm_jax/tests/test_ctrl.py`
-- [ ] port CTRL_MAP_INI_GENARR (xx_* x weights, WC01 smoother pkg/smooth, CTRL_BOUND) applied at initialisation even
+- [x] port CTRL_MAP_INI_GENARR (xx_* x weights, WC01 smoother pkg/smooth, CTRL_BOUND) applied at initialisation even — pkgs/ctrl.py, pkgs/smooth.py
   with mult=0 (found in Task 8: theta changes up to 8.7 K); forcing controls (xx_gentim2d) if they change values
-- [ ] gate: state_from_pickup(useCTRL=T) == ref_ff_jaxdump_v4 S00/G00 bitwise; one step == iteration 2
+- [x] gate: state_from_pickup(useCTRL=T) == ref_ff_jaxdump_v4 S00/G00 bitwise; one step == iteration 2 — test_ctrl.py (8 tests, bitwise)
 
 ### Task 9: EXF flux-forced read path and surface forcing
 **Files:**
