@@ -312,3 +312,16 @@ Production runs may use XLA defaults (ulp-level differences only).
 - Serial header indexing of a full dump directory: ~110 s on cold Lustre (3 ms/record); parallel reading ~3 s.
 - Process: the agent ran `rm -rf` once on a non-existent scratch path (nothing deleted) — against the no-deletion rule;
   reported to Nikolay.
+
+## Task 21 — M1 adjoint acceptance (2026-09-23, sub-agent)
+- 28-day gradients of box-mean theta (adjsen box) on LLC90, production ff, one A100-80: exact and ecco modes pass
+  every bar (FD plateau for 6 controls, TL/adjoint 3e-13, amplification screen, forward bitwise, 3 repeats 3e-14).
+  The exact adjoint needs no ECCO freezes at 4 weeks here (unlike fesom_jax); the freezes change directional
+  derivatives by 0.03-25 %.
+- Pass-through State fields (runoff, sIceLoad, ...) accumulate cotangent and fake a 1.0105/step "growth" on a
+  full-State norm: identify them from the jaxpr and screen per field with an end-of-window seed.
+- The GPU forward is noise-free (J bitwise), so FD precision is limited by switches (TFLUX direction plateaus ~1e-3).
+- Closing over the model inside jax.jvp constant-folded the grid until the CUBIN did not fit the GPU: pass model and
+  state as jit arguments, one heavy stage per process. GPU account limit: 5 running jobs (not GPUs).
+- Open for Nikolay: adjsen box edge (script tests YC<=151 which is always true -> box to 180E); J scaling (literal
+  adjsen divides by box volume twice); default science mode (exact is stable here); units-weighted screen norm.

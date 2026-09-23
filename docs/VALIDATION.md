@@ -45,7 +45,7 @@ built with `-ffp-contract=off`) and pass float parameters as traced pytree leave
 | gradient schedules step / sqrt / chunked | identical to <= 1e-13 (test_checkpoint) |
 | ecco mode (TAF semantics: GGL90 frozen, sigma cut, cg2d operator passive) | forward byte-identical; effect tests (test_adjoint_modes*) |
 | cost on A100-80, 24-step window | gradient 10.3 s = 3.0x forward (step schedule); chunked: device memory flat ~33 GB |
-| multi-week gradient acceptance (Task 21) | in progress |
+| **multi-week gradient acceptance (Task 21)**, box-mean theta, production ff, 7/14/28 d, 1 A100 | exact: FD plateau 6/6 controls, TL/adjoint <= 3e-13; ecco: forward bitwise, amplification median <= 1.00015/step, repeats 3e-14; 28 d gradient = 4.3 forwards, 46 GB device (docs/ADJOINT_RESULTS.md) |
 
 ## Performance (LLC90, 50 levels)
 Fortran: 13-tile serial 1 core ~3.2 s/step; 96 ranks ~0.2 s/step. JAX: one A100 0.34 s/step (0.14 s/step with
