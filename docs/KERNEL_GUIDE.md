@@ -41,8 +41,11 @@ Read `CLAUDE.md` (project rules) first. This file is the working recipe every ke
 ## Kernel shape
 - One module per package/area under `mitgcm_jax/core/` or `mitgcm_jax/pkgs/`; pure functions
   `kernel(params, g, <input arrays>) -> outputs`, jit-able, no Python loops over tiles, no host callbacks.
-- A frozen dataclass per package for its parameters (`GGL90Params`), with `from_namelists(nml)` citing each default.
-  Parameters are static Python floats/ints/bools (closed over), not traced arrays, unless the plan makes them controls.
+- A frozen dataclass per package for its parameters (`GGL90Params`), with `from_namelists(nml)` citing each default,
+  decorated with `mitgcm_jax.params_io.params_pytree`: fields annotated `float` are pytree leaves, everything else
+  (int/bool/str/tuple flags that select branches) is static. Pass the params object as a jit ARGUMENT, never close
+  over it: XLA folds `(x*c1)*c2` -> `x*(c1*c2)` for compile-time constants (1-ulp changes at ~40% of points).
+  No `lax.optimization_barrier` in kernels.
 - Global sums (cg2d): fixed tile order, same as `global_sum_tile.F` (per-tile partial sums, then tiles in order).
 
 ## Gates (tests) — write the gate first, then port until it passes

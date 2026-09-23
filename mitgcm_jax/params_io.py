@@ -35,3 +35,30 @@ class RunNamelists:
             return default
         v = g[key.lower()]
         return v if (array or len(v) != 1) else v[0]
+
+
+def params_pytree(cls):
+    """Register a frozen parameter dataclass as a pytree: fields annotated `float` become leaves (traced when the
+    dataclass is passed as a jit argument), every other field (int, bool, str, tuple, ...) is static metadata.
+
+    Why: XLA's algebraic simplifier folds `(x*c1)*c2` into `x*(c1*c2)` when c1, c2 are compile-time constants
+    (closed-over Python floats), changing the rounding by up to 1 ulp versus the Fortran order (measured: 42% of 1e5
+    values differ; with c1, c2 traced, 0). Passing parameters as traced leaves keeps the Fortran operation order and
+    is also what parameter sensitivities need. Usage:
+
+        @params_pytree
+        @dataclass(frozen=True)
+        class GGL90Params:
+            GGL90alpha: float
+            mxlMaxFlag: int
+            ...
+        jax.jit(ggl90_calc)(params, g, ...)      # params passed as an argument, not closed over
+    """
+    import dataclasses
+
+    import jax
+
+    fields = dataclasses.fields(cls)
+    data = [f.name for f in fields if f.type in (float, "float")]
+    meta = [f.name for f in fields if f.name not in data]
+    return jax.tree_util.register_dataclass(cls, data_fields=data, meta_fields=meta)
