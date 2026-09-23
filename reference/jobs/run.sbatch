@@ -16,6 +16,8 @@ cd "$RUN" || exit 1
 module purge
 module load gcc/11.2.0-gcc-11.2.0 openmpi/4.1.2-gcc-11.2.0 netcdf-fortran/4.5.3-openmpi-4.1.2-gcc-11.2.0
 ulimit -s unlimited
+# coverage builds: write .gcda under this run (GCOV_PREFIX), never into the shared build dir (counts would accumulate)
+case "$(readlink -f mitgcmuv)" in *_gcov_*) export GCOV_PREFIX=$RUN/gcov GCOV_PREFIX_STRIP=0 ;; esac
 LAYOUT=$(awk '/^tree/ {print $4}' OVERRIDES.txt)
 echo "job $SLURM_JOB_ID $(hostname) $(date -Is) layout $LAYOUT binary $(readlink -f mitgcmuv)" | tee run_provenance.txt
 T0=$(date +%s)
