@@ -110,15 +110,45 @@ def tl_tables(rs, P):
     P("")
 
 
+def amplification(trace, k, bars=(1.010, 0.020, 1.030)):
+    """grad.amplification (numpy copy): per-step rates of a chunk-boundary norm trace (window end first)."""
+    tr = [float(t) for t in trace]
+    rates = [(tr[i + 1] / tr[i]) ** (1.0 / k) if tr[i] > 0 else float("nan") for i in range(len(tr) - 1)]
+    fin = np.array([x for x in rates if np.isfinite(x) and x > 0])
+    if fin.size == 0:
+        return None
+    w = max(1, min(3, len(tr) - 1))
+    sus = [(tr[i + w] / tr[i]) ** (1.0 / (k * w)) for i in range(len(tr) - w) if tr[i] > 0]
+    med, spread, worst = float(np.median(fin)), float(np.std(np.log(fin))), float(np.max(sus))
+    return dict(median=med, log_spread=spread, worst3=worst, trace=tr,
+                passes=bool(med <= bars[0] and spread <= bars[1] and worst <= bars[2]))
+
+
+# sea-ice thermodynamic state (without UICE, VICE: in exact_nodyn their reverse is the identity of the skipped LSR, so
+# their cotangent accumulates like a carried constant; sea-ice-only study, docs/PORTING_LESSONS.md)
+SEAICE_THERMO = ("AREA", "HEFF", "HSNOW", "TICES")
+
+
 def screen_tables(rs, P):
     sc = [r for r in rs if r["action"] == "screen"]
     if not sc:
         return
     P("### Amplification screen (terminal seed; per-chunk State-cotangent norm per field group)\n")
+    P("Groups: dynamic = every State field except the carried constants; prognostic = theta, salt, uVel, vVel, etaN; "
+      "seaice = AREA, HEFF, HSNOW, TICES, UICE, VICE; seaice_thermo = without UICE, VICE. Statistics after the seed "
+      "chunk (dynamic: also without the chunk ending at iteration 1).\n")
     P("| window | mode | nproc | group | median /step | log-spread | worst-3 /step | passes | norm end -> start | job |")
     P("|---|---|---|---|---|---|---|---|---|---|")
     for r in sorted(sc, key=lambda r: (r["days"], mode_sort(r["mode"]))):
-        for grp, v in r["amplification_fields"].items():
+        af = dict(r["amplification_fields"])
+        ft = r.get("field_trace") or []
+        th = [float(np.sqrt(sum(v ** 2 for k, v in f.items() if k in SEAICE_THERMO))) for f in ft]
+        if len(th) > 2 and all(t > 0 for t in th[1:]):
+            a = amplification(th[1:], r["chunk"])
+            if a is not None:
+                a["trace"] = th
+                af["seaice_thermo"] = a
+        for grp, v in af.items():
             tr = v.get("trace") or []
             P(f"| {r['days']:g} d | {r['mode']} | {r.get('nproc', 1)} | {grp} | {v['median']:.5f} | "
               f"{v['log_spread']:.4f} | {v['worst3']:.5f} | {'yes' if v['passes'] else 'NO'} | "
