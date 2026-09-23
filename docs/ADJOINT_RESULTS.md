@@ -322,3 +322,25 @@ after 6, 24, 48 one-hour steps from 1992-01-01; levels ecco, no_dynamics, full; 
    take the snow branch (HEFF jump ~1e-5 m): FD error ~1/h for J2 except along HEFF.
 5. Cost (16 CPU cores): forward 0.65 s/step (production tolerance), 21-51 s/step tight; reverse ecco 0.04 s, no_dynamics
    0.6-1.0 s, full 40-46 s per step and cost function (GMRES(40) x 8 per Picard pass, Arnoldi-dominated).
+
+## Adjoint horizon beyond 28 days, flux-forced (2026-09-24, GH200)
+Task 21 recipe (J = running box-mean theta in K from 1992-01-01; controls theta/kapGM/tflux/taux/tauy) on one GH200;
+windows 56-365 d in exact and ecco mode, 130/150/240/300-d exact screens, 365-d single-switch screens. Code: branch
+`adjoint-horizon` (not yet merged); data /work/.../MIT/runs/adjoint_horizon/ (figures/).
+- **Exact passes every bar to 112 d** (worst-3 screens <= 1.0019/step; FD 7/7 directions, best errors 4.9e-5..2.7e-4;
+  TL/adjoint <= 4e-10; repeats <= 5.9e-11, J bitwise).
+- **First failure: dynamic-norm screen between 130 and 150 d**; prognostic fails at 182-240 d, theta at 240-300 d.
+- **At 365 d the far-field gradient is wrong**: dJ/d ln kapGM adjoint -0.115 (TL agrees to 6e-4) vs FD +0.0657
+  (converged); eastern-Pacific theta sensitivity ~1e3 too large. Near-box directions stay <= 3e-3 from FD.
+- **Cause: one event**, reverse days ~127 -> 104 (mid-April to early May 1992): the linearised GGL90 closure is unstable
+  in the eastern equatorial Pacific surface layer (5-25 m, 84-100W, 0-2N); damage grows with the sensitivity that has
+  reached there (dynamic-norm growth 22x at 182 d, 2500x at 365 d).
+- **ggl90="frozen" alone removes it for a year** (screens equal to full ECCO); gm_sigma "stable" or "gm_only" alone fail
+  and amplify more (cutting a damping N^2 derivative while keeping the unstable shear loop). Opposite to fesom_jax.
+- ECCO vs FD grows with the window: 56 d up to 35 %, 182 d 1.4-52 %, 365 d 3-17 % near the box; GGL90-only is closer
+  to FD than ECCO on most directions.
+- Medians never see the event (365 d: 1.00005/step), worst-3 does, the per-field screen sees it one window earlier (TKE
+  at 130 d). Repeats (5e-12) and the TL dot test (1e-7) cannot see a deterministic linear instability: put an FD probe
+  where the screen localises the burst.
+- GH200 cost: forward 0.081 s/step, warm gradient 0.36-0.40 s/step (4.5-5 forwards), device peak 43 GB flat, host RSS
+  <= 107 GB at 365 d (GH200 host memory ~122 GB per GPU: EXF buffers stored once, boundary stride ~sqrt(chunks)).
