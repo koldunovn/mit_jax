@@ -57,3 +57,22 @@ def test_negative_control_step(run):
     bad = P._replace(ggl=dataclasses.replace(P.ggl, GGL90alpha=P.ggl.GGL90alpha * (1 + 1e-6)))
     st1, _ = step(bad, g, kLowC, st, exf_in)
     assert not np.array_equal(np.asarray(st1.f["GGL90TKE"]), oracle.field(ds, 2, "S00_begin", "GGL90TKE"))
+
+
+def test_two_free_steps_bitwise(run):
+    """Step 2 continues from the JAX state after step 1 (free run): bitwise == Fortran S00_begin of iteration 3."""
+    ds, P, g, kLowC, st, exf_in, step = run
+    rundir = oracle.run_dir(oracle.FORCED)
+    nml = RunNamelists(rundir)
+    loader = exf_mod.ExfRecordLoader(P.exf, g, rundir)
+    ins = []
+    for n in (1, 2):
+        myTime, myIter = exf_mod.model_time(nml, n)
+        bufs, facs, _ = loader.load(myTime, myIter)
+        ins.append({"bufs": bufs, "facs": facs, "myTime": myTime})
+    s = st
+    for e in ins:
+        s, aux = step(P, g, kLowC, s, e)
+    assert int(aux["cg2d"]["numIters"]) == 161
+    for k in END:
+        np.testing.assert_array_equal(np.asarray(s.f[k]), oracle.field(ds, 3, "S00_begin", k), err_msg=k)
