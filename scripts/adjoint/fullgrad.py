@@ -70,6 +70,47 @@ from pathlib import Path
 
 import numpy as np
 
+
+def numa_bind_to_gpu():
+    """GH200 nodes (aarch64): Grace socket i and GPU i form one NUMA pair (node i = the socket's LPDDR). With one visible
+    GPU i (CUDA_VISIBLE_DEVICES=i, the --multi mode of fullgrad_dolpung.sbatch), run on socket i's CPUs and prefer its
+    memory, so that the host-side chunk boundaries of several processes do not all land on node 0 (measured, job
+    27655089: node 0 full, kswapd active, a 14-day nodyn reverse 1603 s instead of ~350 s). Called before JAX creates its
+    threads; best effort (returns a note, never raises). MITJAX_NO_NUMA=1 disables it."""
+    import ctypes
+    import platform
+    vis = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+    if platform.machine() != "aarch64" or os.environ.get("MITJAX_NO_NUMA") or not vis.isdigit():
+        return "numa: not bound"
+    i = int(vis)
+    note = []
+    try:
+        txt = Path(f"/sys/devices/system/node/node{i}/cpulist").read_text().strip()
+        cpus = set()
+        for part in txt.split(","):
+            lo, _, hi = part.partition("-")
+            cpus.update(range(int(lo), int(hi or lo) + 1))
+        cpus &= os.sched_getaffinity(0)
+        if cpus:
+            os.sched_setaffinity(0, cpus)
+            note.append(f"{len(cpus)} CPUs of node {i}")
+    except Exception as e:  # noqa: BLE001
+        note.append(f"affinity not set ({e})")
+    try:
+        MPOL_PREFERRED, SYS_set_mempolicy = 1, 237          # asm-generic/unistd.h (arm64): __NR_set_mempolicy 237
+        mask = ctypes.c_ulong(1 << i)
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.syscall(SYS_set_mempolicy, MPOL_PREFERRED, ctypes.byref(mask), ctypes.c_ulong(64)) == 0:
+            note.append(f"memory preferred on node {i}")
+        else:
+            note.append(f"set_mempolicy errno {ctypes.get_errno()}")
+    except Exception as e:  # noqa: BLE001
+        note.append(f"mempolicy not set ({e})")
+    return "numa: " + ", ".join(note)
+
+
+NUMA_NOTE = numa_bind_to_gpu()
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import multiweek_grad as mw  # noqa: E402  (also puts the repo root on sys.path and enables x64)
 
@@ -634,7 +675,8 @@ def main(argv=None):
         logf.write(s + "\n")
         logf.flush()
 
-    log(f"fullgrad: {' '.join(sys.argv)}; devices {jax.devices()}; XLA_FLAGS={os.environ.get('XLA_FLAGS', '')}")
+    log(f"fullgrad: {' '.join(sys.argv)}; devices {jax.devices()}; XLA_FLAGS={os.environ.get('XLA_FLAGS', '')}; "
+        f"{NUMA_NOTE}")
     E = FullExperiment(a, log)
     log(f"named directions: {json.dumps(E.where)}")
     for act in a.actions.split(","):
