@@ -362,3 +362,20 @@ Production runs may use XLA defaults (ulp-level differences only).
   routine each call really is (sincos fusion, pow, tan).
 - Dump stages inside a routine can sit after partial updates (lwflux is already set at X02, inside EXF_RADIATION).
 - Parallel indexing of the full oracle: ~5 s instead of ~110 s.
+
+## M2.4 — sea-ice dynamics: SEAICE_DYNSOLVER with LSR (2026-09-23, sub-agent)
+- Whole dynsolver bitwise vs full_jaxdump_v5 it 1-3 (I00 -> Y01..Y06 -> L01-L04 per Picard pass -> I01), LSOR sweep
+  counts 178/118, 112/82, 84/58 and S1/S2/WFAU/WFAV equal (stopping margin small: S2 = 1.986e-4 vs LSR_ERROR 2e-4);
+  only the unread uice_fd/vice_fd differ by 1 ulp at 27-45 points (gcc fuses SIN/COS into sincos). P=4 == P=1.
+- Forward = the literal loop in lax.while_loop (line Gauss-Seidel in Fortran order, u rows + transposed v columns as
+  26 lanes, Thomas scans). Derivative = custom_jvp implicit derivative of the converged system via
+  custom_linear_solve (GMRES(40), fixed 8 cycles, one-sweep line-SOR preconditioner, transpose from
+  linear_transpose; tile-order inner products); nothing is differentiated through iterations. Because LSR_ERROR=2e-4
+  leaves the Fortran iterate far from the solution, the FD checks run the forward to 1e-12. Masked rows of A are
+  decoupled: judge the transpose residual on wet points only.
+- gfortran 11 vectorises EXP in seaice_calc_ice_strength into libmvec `_ZGVbN2v_exp`; neither scalar glibc exp nor
+  XLA's reproduces PRESS0. `exp_libmvec` transliterates the kernel (8M arguments bitwise). Check `nm *.o | grep _ZGV`
+  before trusting any libm call.
+- The Fortran re-initialises locals only where ALLOW_AUTODIFF_TAMC does: unwritten halo points keep earlier values
+  (seaiceMass starts at 1000), so all-point gates need the entry values carried in the state.
+- Cost: ~1.2 s/step on 16 CPU cores (~3.5 ms per sweep); ~16k sequential scan steps per sweep — GPU cost unmeasured.
