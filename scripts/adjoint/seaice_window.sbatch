@@ -16,17 +16,24 @@
 # processes: sbatch --ntasks=32 --cpus-per-task=4 ... (measured: tight forward 28 vs 21 s/step with 4 vs 16 cores).
 # Every process appends to its --out/results.jsonl (one JSON line per result). Nothing is deleted.
 set -u
-cd /home/a/a270088/MIT
-PY=/work/ab0995/a270088/mambaforge/envs/mitgcm-jax/bin/python
+# repository: $MITJAX_TREE, else the checkout holding this script (under sbatch $0 is a spool copy: scontrol knows
+# the original). Paths: mitgcm_jax/paths.py (MITJAX_WORK, ...); python: $MITJAX_PYTHON.
+SELF=$0; [ -f "$(dirname "$SELF")/../../mitgcm_jax/paths.py" ] ||
+  SELF=$(scontrol show job "${SLURM_JOB_ID:-none}" 2>/dev/null | sed -n 's/^ *Command=//p')
+REPO=${MITJAX_TREE:-$(cd "$(dirname "$SELF")/../.." && pwd)}
+[ -f "$REPO/mitgcm_jax/paths.py" ] || { echo "FAIL: no mitgcm_jax repository at $REPO (set MITJAX_TREE)"; exit 1; }
+PY=${MITJAX_PYTHON:-/work/ab0995/a270088/mambaforge/envs/mitgcm-jax/bin/python}
+eval "$("$PY" "$REPO/mitgcm_jax/paths.py" --sh)"
+cd "$REPO"
 export JAX_PLATFORMS=cpu
-export PYTHONPYCACHEPREFIX=/work/ab0995/a270088/MIT/dev/iceadj/pyc_${SLURM_JOB_ID:-local}
+export PYTHONPYCACHEPREFIX=$MITJAX_WORK/dev/iceadj/pyc_${SLURM_JOB_ID:-local}
 NC=${SLURM_CPUS_PER_TASK:-16}
 echo "job ${SLURM_JOB_ID:-local} on $(hostname) $(date -Is), commit $(git rev-parse --short HEAD), $# processes x $NC cores"
 i=0
 for cfg in "$@"; do
   echo "=== process $i: $cfg"
   srun --exclusive -n1 -c$NC --mem-per-cpu=1700M $PY scripts/adjoint/seaice_window.py $cfg \
-    > /work/ab0995/a270088/MIT/dev/iceadj/logs/iceadj-${SLURM_JOB_ID:-local}-p$i.out 2>&1 &
+    > $MITJAX_WORK/dev/iceadj/logs/iceadj-${SLURM_JOB_ID:-local}-p$i.out 2>&1 &
   i=$((i+1))
 done
 wait

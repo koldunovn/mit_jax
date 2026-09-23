@@ -7,10 +7,11 @@ import functools
 import json
 from pathlib import Path
 
+from mitgcm_jax import paths
 from mitgcm_jax.io.dump import DumpSet
 
 REPO = Path(__file__).resolve().parents[2]
-RUNS = Path("/work/ab0995/a270088/MIT/reference/runs")
+RUNS = paths.REFERENCE_RUNS        # $MITJAX_REFERENCE_RUNS
 
 
 def run_dir(name):

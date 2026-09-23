@@ -5,6 +5,6 @@
 PATH=$(echo "$PATH" | tr ':' '\n' | grep -v '^/sw/spack-levante/' | grep -v mambaforge | paste -sd:)
 LD_LIBRARY_PATH=$(echo "${LD_LIBRARY_PATH:-}" | tr ':' '\n' | grep -v '^/sw/spack-levante/' | grep -v mambaforge | paste -sd:)
 export PATH LD_LIBRARY_PATH
-export MITJAX_ARM_VENV=/work/ab0995/a270088/MIT/envs/mitgcm-jax-arm
+export MITJAX_ARM_VENV=${MITJAX_ARM_VENV:-${MITJAX_WORK:-/work/ab0995/a270088/MIT}/envs/mitgcm-jax-arm}
 export PY=$MITJAX_ARM_VENV/bin/python
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX

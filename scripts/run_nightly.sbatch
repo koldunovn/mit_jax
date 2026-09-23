@@ -9,14 +9,20 @@
 #SBATCH --output=/work/ab0995/a270088/MIT/runs/nightly/slurm-%j.out
 #
 # Nightly: the long CPU suite (full-V4r4 step gates, full-tree adjoint modes, sea-ice adjoint window); budget ~90 min.
-#   sbatch scripts/run_nightly.sbatch           (from ~/MIT; the slurm log dir must exist)
+#   sbatch scripts/run_nightly.sbatch            (the slurm log dir must exist; elsewhere: sbatch -A ... -p ... --output=...)
 # Pass/fail is decided by scripts/check_pytest_report.py on the JUnit report AND pytest's exit code.
 # Each job writes into its own new OUT_DIR and never deletes anything.
 set -u
 
-REPO=/home/a/a270088/MIT
-PY=/work/ab0995/a270088/mambaforge/envs/mitgcm-jax/bin/python
-OUT_DIR=/work/ab0995/a270088/MIT/runs/nightly/${SLURM_JOB_ID:?run this through sbatch}
+# repository: $MITJAX_TREE, else the checkout holding this script (under sbatch $0 is a spool copy: scontrol knows
+# the original). Paths: mitgcm_jax/paths.py (MITJAX_WORK, ...); python: $MITJAX_PYTHON.
+SELF=$0; [ -f "$(dirname "$SELF")/../mitgcm_jax/paths.py" ] ||
+  SELF=$(scontrol show job "${SLURM_JOB_ID:-none}" 2>/dev/null | sed -n 's/^ *Command=//p')
+REPO=${MITJAX_TREE:-$(cd "$(dirname "$SELF")/.." && pwd)}
+[ -f "$REPO/mitgcm_jax/paths.py" ] || { echo "FAIL: no mitgcm_jax repository at $REPO (set MITJAX_TREE)"; exit 1; }
+PY=${MITJAX_PYTHON:-/work/ab0995/a270088/mambaforge/envs/mitgcm-jax/bin/python}
+eval "$("$PY" "$REPO/mitgcm_jax/paths.py" --sh)"
+OUT_DIR=$MITJAX_RUNS/nightly/${SLURM_JOB_ID:?run this through sbatch}
 if [ -e "$OUT_DIR" ]; then echo "FAIL: OUT_DIR $OUT_DIR already exists"; exit 1; fi
 mkdir -p "$OUT_DIR"
 

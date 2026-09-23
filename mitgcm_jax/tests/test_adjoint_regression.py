@@ -25,10 +25,12 @@ from pathlib import Path
 import jax
 import pytest
 
+from mitgcm_jax import paths
+
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "adjoint" / "multiweek_grad.py"
-CACHE = Path("/work/ab0995/a270088/MIT/runs/adjoint/init_ref_ff_serial13_1day")   # multiweek_grad.CACHE
-OUT_ROOT = Path("/work/ab0995/a270088/MIT/runs_jax/tier2")
+CACHE = paths.RUNS / "adjoint" / "init_ref_ff_serial13_1day"   # multiweek_grad.CACHE
+OUT_ROOT = paths.RUNS_JAX / "tier2"
 
 # NVIDIA A100-SXM4-80GB, default XLA flags, sum_unroll=5, repeat r0 of job 27640768 (its r1: J bitwise, gradient
 # within 1.3e-12 relative).

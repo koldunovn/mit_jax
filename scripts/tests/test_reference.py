@@ -7,11 +7,12 @@ means the reference is broken, not that the test does not apply).
 import json
 from pathlib import Path
 
+from mitgcm_jax import paths
 from mitgcm_jax.io.mds import read_mds
 from mitgcm_jax.io.monitor import compare_monitors, read_monitor
 
 REPO = Path(__file__).resolve().parents[2]
-RUNS = Path("/work/ab0995/a270088/MIT/reference/runs")
+RUNS = paths.REFERENCE_RUNS        # $MITJAX_REFERENCE_RUNS
 REG = json.loads((REPO / "reference" / "runs.json").read_text())
 STATE_FILES = ("T", "S", "Eta", "U", "V", "W", "PH")
 SERIAL_ONLY_MISSING = {"dynstat_sst_max", "dynstat_sst_min", "dynstat_sst_mean", "dynstat_sst_sd", "dynstat_sst_del2",

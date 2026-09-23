@@ -9,12 +9,18 @@
 #   A100-80:  sbatch -A ab0995_gpu -p gpu --constraint=a100_80 --gpus=N scripts/runs/full_speed_bench.sbatch NSTEPS N
 #   GH200:    MITJAX_ENV=dolpung sbatch -A mh1571 -p dolpung --gpus=N scripts/runs/full_speed_bench.sbatch NSTEPS N
 set -u
+# repository: $MITJAX_TREE, else the checkout holding this script (under sbatch $0 is a spool copy: scontrol knows
+# the original). Paths: mitgcm_jax/paths.py (MITJAX_WORK, ...); python: $MITJAX_PYTHON.
+SELF=$0; [ -f "$(dirname "$SELF")/../../mitgcm_jax/paths.py" ] ||
+  SELF=$(scontrol show job "${SLURM_JOB_ID:-none}" 2>/dev/null | sed -n 's/^ *Command=//p')
+REPO=${MITJAX_TREE:-$(cd "$(dirname "$SELF")/../.." && pwd)}
+[ -f "$REPO/mitgcm_jax/paths.py" ] || { echo "FAIL: no mitgcm_jax repository at $REPO (set MITJAX_TREE)"; exit 1; }
 if [ "${MITJAX_ENV:-}" = dolpung ]; then
-  source /home/a/a270088/MIT/scripts/dolpung/env_dolpung.sh
+  source "$REPO/scripts/dolpung/env_dolpung.sh"
 else
-  PY=/work/ab0995/a270088/mambaforge/envs/mitgcm-jax/bin/python
+  PY=${MITJAX_PYTHON:-/work/ab0995/a270088/mambaforge/envs/mitgcm-jax/bin/python}
 fi
-cd ${MITJAX_TREE:-/home/a/a270088/MIT}
+cd "$REPO"
 git log --oneline -1
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.85
 nvidia-smi -L

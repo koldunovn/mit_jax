@@ -1,7 +1,7 @@
 # Fortran reference: builds and runs (plan Task 4)
 
-Everything heavy lives in `/work/ab0995/a270088/MIT/reference/` (`bin/`, `build/`, `runs/`, `logs/`). Nothing there is
-deleted or overwritten; every build and run gets a new directory.
+Everything heavy lives in `$MITJAX_REFERENCE` (`mitgcm_jax/paths.py`; on Levante `/work/ab0995/a270088/MIT/reference/`):
+`bin/`, `build/`, `runs/`, `logs/`. Nothing there is deleted or overwritten; every build and run gets a new directory.
 
 ## Builds (2026-09-23)
 
@@ -40,7 +40,9 @@ standing overrides (printed, read back, and written to `OVERRIDES.txt`), links e
 Standing overrides: `useECCO=F`, `useProfiles=F`, `useCAL=T` (cost-function packages; their observation inputs are
 not staged) — assumed forward-neutral, to be confirmed by one same-binary run with them on; `nTimeSteps`,
 `monitorFreq`. serial13 and mpi13 also swap in `reference/data.exch2_13x90x90` (no `blankList`: every 90×90 tile is
-wet).
+wet). `--no-binary` (2026-09-24) makes the same directory without the executable, for JAX runs on a machine without a
+Fortran build (`docs/RUN_ONE_YEAR.md`); two-step JAX runs from such a directory are bitwise identical to runs from
+`ref_ff_serial13_1day` / `ref_full_serial13_1month`.
 
 Run: `sbatch -p shared --ntasks=1 --mem=32G reference/jobs/run.sbatch RUNDIR` (serial13) or
 `sbatch -p compute --ntasks=96 reference/jobs/run.sbatch RUNDIR` (mpi96) or

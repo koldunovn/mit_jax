@@ -1,8 +1,8 @@
 """Staged ECCO v4r4 inputs (plan Task 3): bytes as recorded, shapes and byte order as the model reads them, and an
 input audit that fails when a file is missing.
 
-Needs the data under /work (docs/DATA.md); it FAILS rather than skips when they are absent, because on Levante an
-absent file means the staging is broken.
+Needs the data under $MITJAX_DATA (mitgcm_jax/paths.py, docs/DATA.md); it FAILS rather than skips when they are
+absent, because on Levante an absent file means the staging is broken.
 """
 
 import hashlib
@@ -13,10 +13,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from mitgcm_jax import paths
 from mitgcm_jax.io.mds import read_bin, read_mds
 
 REPO = Path(__file__).resolve().parents[2]
-DATA = Path("/work/ab0995/a270088/MIT/data/eccov4r4")
+DATA = paths.DATA                  # $MITJAX_DATA
 V4R4 = REPO / "ECCO-v4-Configurations" / "ECCOv4 Release 4"
 HASH_LIMIT = 2 * 2**30  # the 90-190 GB forcing archives are verified at fetch time (sha512), not here
 

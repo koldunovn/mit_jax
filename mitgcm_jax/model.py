@@ -48,6 +48,7 @@ from mitgcm_jax.core.phi_hyd import kLowC_from_hFac
 from mitgcm_jax.io.llc import compact_to_tiles
 from mitgcm_jax.io.mds import read_bin
 from mitgcm_jax.layout import Layout
+from mitgcm_jax import paths
 from mitgcm_jax.params_io import RunNamelists
 from mitgcm_jax.parallel.exchange import default_exchanger
 from mitgcm_jax.pkgs import ctrl as ctrl_mod
@@ -62,7 +63,7 @@ from mitgcm_jax.pkgs import seaice_init as si_mod
 from mitgcm_jax.pkgs import seaice_model as sm_mod
 
 
-GRID_DIR = Path("/work/ab0995/a270088/MIT/data/eccov4r4/native_grid_files")
+GRID_DIR = paths.GRID_DIR          # $MITJAX_GRID_DIR (mitgcm_jax/paths.py)
 
 
 def _extra_grid_fields(nml, g, ex, rundir):

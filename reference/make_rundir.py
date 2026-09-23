@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
-"""Create a Fortran reference run directory for one ECCO v4r4 tree (plan Task 4).
+"""Create a run directory for one ECCO v4r4 tree: Fortran reference runs, or JAX-only runs with --no-binary.
 
-    make_rundir.py TREE LAYOUT NAME --nsteps N [--monitor SECONDS] [--binary PATH] [--set FILE:GROUP:KEY=VALUE ...]
+    make_rundir.py TREE LAYOUT NAME --nsteps N [--monitor SECONDS] [--binary PATH | --no-binary]
+                   [--set FILE:GROUP:KEY=VALUE ...]
                    [--pickup-from RUNDIR --niter0 N]    matched restart: start from that run's pickup*.<N> files
                    [--cost-pkgs production]             keep the production useECCO/useProfiles (no data.pkg override)
 
-TREE = full | ff, LAYOUT = mpi96 | serial13 | mpi13. The directory /work/.../MIT/reference/runs/<NAME> must not exist.
-It gets: the tree's production namelists, the overrides below (every one printed and written to OVERRIDES.txt),
-`data.exch2` for 13x90x90 when LAYOUT=serial13 or mpi13 (one file for both: same tiles, same tile numbering),
-symlinks to every input file `scripts/audit_run_inputs.py` derives (the script refuses to create a run with a missing
-required input), diagnostics sub-directories, and the executable (newest frozen binary for TREE/LAYOUT unless
---binary).
+TREE = full | ff, LAYOUT = mpi96 | serial13 | mpi13. The directory $MITJAX_REFERENCE_RUNS/<NAME> (mitgcm_jax/paths.py)
+must not exist. It gets: the tree's production namelists (from the ECCO-v4-Configurations clone in the repository
+root), the overrides below (every one printed and written to OVERRIDES.txt), `data.exch2` for 13x90x90 when
+LAYOUT=serial13 or mpi13 (one file for both: same tiles, same tile numbering), symlinks to every input file
+`scripts/audit_run_inputs.py` derives from $MITJAX_DATA (the script refuses to create a run with a missing required
+input), diagnostics sub-directories, and the executable `mitgcmuv` (newest frozen binary for TREE/LAYOUT in
+$MITJAX_REFERENCE/bin unless --binary).
+
+--no-binary: no executable (a run directory for the JAX model only, scripts/run_jax.py --rundir; needs no Fortran
+build). The JAX model runs 13 tiles of 90x90, so its run directories use LAYOUT serial13 (or mpi13, same data.exch2).
 
 Standing overrides for reference runs (deviations from the production namelists, each documented):
   data.pkg  useECCO=F, useProfiles=F, useCAL=T   cost-function packages off (--cost-pkgs off, the default). useCAL
@@ -32,12 +37,12 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "scripts"))
+from mitgcm_jax.paths import DATA, REFERENCE, REFERENCE_RUNS  # noqa: E402  ($MITJAX_*, mitgcm_jax/paths.py)
 from mitgcm_jax.io.namelist import read_namelist  # noqa: E402
 import audit_run_inputs as air  # noqa: E402
 
 V4 = REPO / "ECCO-v4-Configurations" / "ECCOv4 Release 4"
-WORK = Path("/work/ab0995/a270088/MIT")
-DATA = WORK / "data" / "eccov4r4"
+BIN = REFERENCE / "bin"               # frozen Fortran executables (reference/build.sh)
 SEARCH = [DATA / "input_init", DATA / "native_grid_files"]  # + unpacked forcing dirs, found below
 
 
@@ -66,10 +71,11 @@ def set_value(text, group, key, value):
 
 def newest_binary(tree, layout, variant=""):
     pat = re.compile(rf"mitgcmuv_{tree}_{layout}{variant}_[0-9a-f]{{12}}")
-    bins = sorted((p for p in (WORK / "reference" / "bin").iterdir() if pat.fullmatch(p.name)),
+    bins = sorted((p for p in (BIN.iterdir() if BIN.is_dir() else ()) if pat.fullmatch(p.name)),
                   key=lambda p: p.stat().st_mtime)
     if not bins:
-        raise SystemExit(f"no binary for {tree}/{layout}; build with reference/jobs/build.sbatch")
+        raise SystemExit(f"no binary for {tree}/{layout} in {BIN}; build with reference/jobs/build.sbatch "
+                         f"(or --no-binary for a JAX-only run directory)")
     return bins[-1]
 
 
@@ -80,7 +86,9 @@ def main(argv=None):
     ap.add_argument("name")
     ap.add_argument("--nsteps", type=int, required=True)
     ap.add_argument("--monitor", type=float, default=3600.0)
-    ap.add_argument("--binary")
+    ap.add_argument("--binary", help="executable to link as mitgcmuv (default: newest frozen binary)")
+    ap.add_argument("--no-binary", action="store_true",
+                    help="no executable: a run directory for the JAX model only (no Fortran build needed)")
     ap.add_argument("--variant", default="", help="binary variant suffix, e.g. _jaxdump or _gcov")
     ap.add_argument("--set", nargs="*", default=[], help="extra FILE:GROUP:KEY=VALUE overrides")
     ap.add_argument("--pickup-from", help="run directory whose pickup*.<niter0> files start this run")
@@ -89,10 +97,15 @@ def main(argv=None):
                     help="off: standing override useECCO=F, useProfiles=F, useCAL=T; production: keep data.pkg")
     a = ap.parse_args(argv)
 
-    run = WORK / "reference" / "runs" / a.name
+    run = REFERENCE_RUNS / a.name
     if run.exists():
         raise SystemExit(f"{run} exists; choose a new name (nothing is overwritten)")
+    if a.binary and a.no_binary:
+        raise SystemExit("--binary and --no-binary exclude each other")
     src = V4 / ("namelist" if a.tree == "full" else "flux-forced/namelist")
+    if not src.is_dir():
+        raise SystemExit(f"{src} not found: clone https://github.com/ECCO-GROUP/ECCO-v4-Configurations into {REPO} "
+                         f"(docs/RUN_ONE_YEAR.md)")
     overrides = [] if a.cost_pkgs == "production" else [
         ("data.pkg", "packages", "useECCO", ".FALSE."), ("data.pkg", "packages", "useProfiles", ".FALSE."),
         ("data.pkg", "packages", "useCAL", ".TRUE.")]
@@ -145,6 +158,7 @@ def main(argv=None):
     if missing:
         print(f"REFUSED: {len(missing)} required inputs missing, e.g. {missing[:6]}")
         return 1
+    binary = None if a.no_binary else (Path(a.binary) if a.binary else newest_binary(a.tree, a.layout, a.variant))
 
     run.mkdir(parents=True)
     for name, text in files.items():
@@ -159,6 +173,8 @@ def main(argv=None):
                 o.write(f"absent optional cost input: {x}\n")
         if a.layout in ("serial13", "mpi13"):
             o.write("data.exch2 <- reference/data.exch2_13x90x90 (no blankList)\n")
+        if binary is None:
+            o.write("no executable (--no-binary): run directory for the JAX model only\n")
     for name, p in links.items():
         (run / name).symlink_to(p)
     # diagnostics output sub-directories (ECCO's misc/tools/mkdir_subdir_diags.py does the same)
@@ -166,10 +182,10 @@ def main(argv=None):
     for k, v in dg.items():
         if k.startswith("filename(") and v and "/" in v[0]:
             (run / v[0]).parent.mkdir(parents=True, exist_ok=True)
-    binary = Path(a.binary) if a.binary else newest_binary(a.tree, a.layout, a.variant)
-    (run / "mitgcmuv").symlink_to(binary)
+    if binary is not None:
+        (run / "mitgcmuv").symlink_to(binary)
     air.audit(run, sha_out=run / "INPUTS.sha256")
-    print(f"RUNDIR {run}  binary {binary.name}")
+    print(f"RUNDIR {run}  binary {binary.name if binary else 'none (--no-binary)'}")
     return 0
 
 

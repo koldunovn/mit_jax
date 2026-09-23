@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Fetch ECCO v4r4 inputs and reference products from PO.DAAC (Earthdata login from ~/.netrc).
 
-Stdlib only. Files land under DATA_ROOT/<group>/; nothing is ever deleted. A download goes to `<name>.part` and is
-renamed only after its checksum matches the one PO.DAAC publishes (sha512 sidecar for the ancillary archives, the
-CMR checksum for product granules). A file already present is skipped only if its checksum matches — never by name.
+Stdlib only. Files land under DATA_ROOT/<group>/ (DATA_ROOT = $MITJAX_DATA, mitgcm_jax/paths.py); nothing is ever
+deleted. A download goes to `<name>.part` and is renamed only after its checksum matches the one PO.DAAC publishes
+(sha512 sidecar for the ancillary archives, the CMR checksum for product granules). A file already present is skipped only if its checksum matches — never by name.
 Interrupted downloads resume from the `.part` size (HTTP Range).
 
     fetch_eccov4r4.py list  GROUP...            show what a group would fetch (CMR query, no download)
@@ -21,6 +21,7 @@ published whole.
 import argparse
 import fnmatch
 import hashlib
+import importlib.util
 import re
 import tarfile
 import http.cookiejar
@@ -35,7 +36,17 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-DATA_ROOT = Path("/work/ab0995/a270088/MIT/data/eccov4r4")
+
+def _paths():
+    """mitgcm_jax/paths.py loaded by file (importing the mitgcm_jax package would import jax)."""
+    spec = importlib.util.spec_from_file_location("mitgcm_jax_paths",
+                                                  Path(__file__).resolve().parents[1] / "mitgcm_jax" / "paths.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+DATA_ROOT = _paths().DATA                     # $MITJAX_DATA (default: <work root>/data/eccov4r4)
 CMR = "https://cmr.earthdata.nasa.gov/search/granules.umm_json"
 URS = "urs.earthdata.nasa.gov"
 UA = "mitgcm-jax-fetch/0.1 (python urllib)"

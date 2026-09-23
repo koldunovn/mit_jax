@@ -1,0 +1,20 @@
+#!/bin/bash
+#PBS -N mitjax_year
+#PBS -q gpu_normal@pbs05a
+#PBS -l select=1:ncpus=72:ngpus=1:model=gh200
+#PBS -l walltime=02:00:00
+#PBS -j oe
+# One year (or one part of it) on one Cabeus GH200 node. The run itself is scripts/runs/one_year.sbatch (tested on
+# DKRZ Levante), executed with bash; only the scheduler lines differ. Untested on Cabeus (no access). From the
+# repository root:
+#   qsub -v TREE=full,OUT=$MITJAX_WORK/runs_jax/full_1992,RUNDIR=$MITJAX_WORK/reference/runs/jax_full_1992 \
+#        scripts/cabeus/one_year_gh200.pbs
+# Optional: NSTEPS (default 8760); RESTART=<state npz> and FOFF=<frames written> continue an earlier part
+# (qsub -W depend=afterok:<job id> ...). Expected: full 0.29 s/step (8760 steps ~48 min), ff ~0.10 s/step.
+set -u
+REPO=${MITJAX_TREE:-$PBS_O_WORKDIR}
+[ -f "$REPO/mitgcm_jax/paths.py" ] || { echo "FAIL: qsub from the repository root (or qsub -v MITJAX_TREE=...)"; exit 1; }
+source "$REPO/scripts/cabeus/env_cabeus.sh"
+cd "$REPO"
+exec bash scripts/runs/one_year.sbatch "${TREE:?qsub -v TREE=ff|full,OUT=...,RUNDIR=...}" "${OUT:?OUT}" \
+  "${RUNDIR:?RUNDIR}" "${NSTEPS:-8760}" "${RESTART:-}" "${FOFF:-0}"

@@ -23,6 +23,7 @@ import jax  # noqa: E402
 import jax.numpy as jnp  # noqa: E402
 
 import mitgcm_jax  # noqa: E402,F401
+from mitgcm_jax import paths  # noqa: E402
 from mitgcm_jax.core.forward_step import forward_step  # noqa: E402
 from mitgcm_jax.init import state_from_pickup  # noqa: E402
 from mitgcm_jax.model import setup  # noqa: E402
@@ -31,7 +32,7 @@ from mitgcm_jax.pkgs import exf_fluxforced as exf_mod  # noqa: E402
 from mitgcm_jax.pkgs import exf_full as exfb_mod  # noqa: E402
 from mitgcm_jax.state import State  # noqa: E402
 
-RUNDIR = "/work/ab0995/a270088/MIT/reference/runs/ref_full_serial13_1month"
+RUNDIR = str(paths.REFERENCE_RUNS / "ref_full_serial13_1month")   # $MITJAX_REFERENCE_RUNS
 
 
 def main(argv=None):

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Plan Task 21: the result tables of docs/ADJOINT_RESULTS.md from the results.jsonl rows multiweek_grad.py wrote.
 
-    python3 scripts/adjoint/summarize_results.py /work/ab0995/a270088/MIT/runs/adjoint/w07_* ...  (stdlib only)
+    python3 scripts/adjoint/summarize_results.py $MITJAX_RUNS/adjoint/w07_* ...  (stdlib only)
 """
 
 import json

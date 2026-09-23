@@ -33,6 +33,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from mitgcm_jax import paths
 from mitgcm_jax.grid.geometry import grid_from_dump
 from mitgcm_jax.io.dump import DumpSet, read_file
 from mitgcm_jax.layout import Layout
@@ -48,7 +49,7 @@ L = Layout()
 EX = default_exchanger(L)
 ITS = (1, 2, 3)
 COUNTS = {1: (178, 118), 2: (112, 82), 3: (84, 58)}  # LSOR sweeps per Picard pass (test_seaice_dyn.py)
-GRID_DIR = Path("/work/ab0995/a270088/MIT/data/eccov4r4/native_grid_files")  # model.GRID_DIR
+GRID_DIR = paths.GRID_DIR  # model.GRID_DIR
 FF_DUMPED = ("fu", "fv", "Qnet", "Qsw", "EmPmR", "saltFlux", "sIceLoad")
 PASS_THROUGH = ("surfaceForcingU", "surfaceForcingV", "surfaceForcingT", "surfaceForcingS", "pLoad", "phi0surf")
 I01_ULP = ("uice_fd", "vice_fd")

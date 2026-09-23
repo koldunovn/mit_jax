@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Render model fields on a rotating globe (or a Robinson map) with nereus and stitch the frames into a movie.
 
-Runs in the nereus env (NOT the model env):
-    /work/ab0995/a270088/mambaforge/envs/nereus/bin/python tools/animate_globe.py FRAMES_DIR MESH_RUNDIR OUT \
+Runs in the nereus env (NOT the model env; docs/RUN_ONE_YEAR.md):
+    python tools/animate_globe.py FRAMES_DIR MESH_RUNDIR OUT \
         [--var sst] [--vmin -2 --vmax 30] [--lat0 20] [--spin 360] [--fps 12] [--label "JAX MITgcm"]
         [--projection robinson --stride 4 --fps 40]     (a year of 6-hourly frames as daily frames in ~9 s)
 
 FRAMES_DIR holds frame_<n>.npz files, each with a compact LLC90 field (1170, 90) under the name --var and scalars
-`iter` and `date` (written by the model driver, mitgcm_jax/diagnostics/frames.py, or by frames_from_fortran below).
-MESH_RUNDIR is a Fortran run directory with the model's grid files (XC, YC, RAC, hFacC ...), read by
-nereus.mitgcm.load_mesh, whose point order is the same compact layout. Land (hFacC == 0 at the surface) is masked.
+`iter` and `date` (written by the model driver scripts/run_jax.py into OUTDIR/frames, or by frames_from_fortran below).
+MESH_RUNDIR is a directory with the model's grid files (XC, YC, RAC, hFacC ...): a Fortran run directory, or the output
+of tools/write_grid_mds.py (no Fortran needed); read by nereus.mitgcm.load_mesh, whose point order is the same compact
+layout. Land (hFacC == 0 at the surface) is masked. Needs ffmpeg on PATH.
 The globe turns by --spin degrees of longitude over the whole movie (orthographic); --projection robinson draws a
 static global map on a light background instead; arctic / antarctic: static polar caps (>= 50 degrees). --stride N uses every N-th frame. Writes OUT/png/*.png, OUT.mp4 and
 OUT.gif.

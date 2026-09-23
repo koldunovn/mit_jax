@@ -25,6 +25,7 @@ TIER1_MAX_TESTS = 100
 MANIFEST = {
     "mitgcm_jax/tests/test_env.py": "smoke",
     "mitgcm_jax/tests/test_manifest.py": "smoke",
+    "mitgcm_jax/tests/test_paths.py": "smoke",
     "scripts/tests/test_check_pytest_report.py": "smoke",
     "scripts/tests/test_overrides.py": "tier1",
     "scripts/tests/test_data_manifest.py": "tier1x",

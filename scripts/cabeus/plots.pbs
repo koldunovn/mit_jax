@@ -1,0 +1,19 @@
+#!/bin/bash
+#PBS -N mitjax_plots
+#PBS -q gpu_normal@pbspl4
+#PBS -l select=1:ncpus=16:ngpus=1:mem=60GB:model=mil_a100
+#PBS -l place=scatter:shared
+#PBS -l walltime=00:40:00
+#PBS -j oe
+# Figures and movies of a one-year run: scripts/runs/plot_one_year.sh (tested on Levante), executed with bash. It needs
+# no GPU; this uses one shared A100 vnode only because it is an x86_64 node with the same software (any x86_64 node
+# with the nereus environment will do: change the select line). Untested on Cabeus (no access).
+#   qsub -v TREE=full,RUNDIR=$MITJAX_WORK/reference/runs/jax_full_1992,FIG=$MITJAX_WORK/figs/full_1992,RUNOUT=$MITJAX_WORK/runs_jax/full_1992 \
+#        scripts/cabeus/plots.pbs          (RUNOUT: one run_jax output directory; for a run in parts use RUNOUT and RUNOUT2)
+set -u
+REPO=${MITJAX_TREE:-$PBS_O_WORKDIR}
+[ -f "$REPO/mitgcm_jax/paths.py" ] || { echo "FAIL: qsub from the repository root (or qsub -v MITJAX_TREE=...)"; exit 1; }
+source "$REPO/scripts/cabeus/env_cabeus.sh"
+cd "$REPO"
+export JOBS=${JOBS:-14}
+exec bash scripts/runs/plot_one_year.sh "${TREE:?TREE}" "${RUNDIR:?RUNDIR}" "${FIG:?FIG}" "${RUNOUT:?RUNOUT}" ${RUNOUT2:-}

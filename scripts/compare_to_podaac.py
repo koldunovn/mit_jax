@@ -20,10 +20,11 @@ import netCDF4
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from mitgcm_jax import paths  # noqa: E402
 from mitgcm_jax.io.llc import compact_to_tiles  # noqa: E402
 from mitgcm_jax.io.mds import read_mds  # noqa: E402
 
-DATA = Path("/work/ab0995/a270088/MIT/data/eccov4r4")
+DATA = paths.DATA                  # $MITJAX_DATA
 SNAP = DATA / "products_snap_19920102"
 GEOM = DATA / "products_fixed/ECCO_L4_GEOMETRY_LLC0090GRID_V4R4/GRID_GEOMETRY_ECCO_V4r4_native_llc0090.nc"
 

@@ -4,7 +4,7 @@
 Runs in the nereus env (never the earthkit env), reading what scripts/adjoint/multiweek_grad.py wrote (grid.npz,
 grad_*.npz / screen_*.npz, results.jsonl); needs no JAX:
 
-    /work/ab0995/a270088/mambaforge/envs/nereus/bin/python scripts/adjoint/plot_sensitivity.py \
+    $MITJAX_NEREUS_PYTHON scripts/adjoint/plot_sensitivity.py \
         --runs DIR1,DIR2,... --grad DIR/grad_ecco_28d_r0.npz --tag ecco_28d --figdir FIGDIR
 """
 

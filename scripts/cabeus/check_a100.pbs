@@ -1,0 +1,18 @@
+#!/bin/bash
+#PBS -N mitjax_check
+#PBS -q gpu_devel@pbspl4
+#PBS -l select=1:ncpus=16:ngpus=1:mem=60GB:model=mil_a100
+#PBS -l place=scatter:shared
+#PBS -l walltime=00:20:00
+#PBS -j oe
+# Installation check on one Cabeus A100 GPU (one of the four vnodes of an A100 node). Untested (no Cabeus access);
+# the commands are those of the tested Levante check. From the repository root:  qsub scripts/cabeus/check_a100.pbs
+# Passes when the GPU is listed and used, the float64 matmul agrees with numpy, and the smoke tests pass.
+set -u
+REPO=${MITJAX_TREE:-$PBS_O_WORKDIR}
+[ -f "$REPO/mitgcm_jax/paths.py" ] || { echo "FAIL: qsub from the repository root (or qsub -v MITJAX_TREE=...)"; exit 1; }
+source "$REPO/scripts/cabeus/env_cabeus.sh"
+cd "$REPO"
+uname -m; nvidia-smi -L
+"$MITJAX_PYTHON" scripts/check_env.py
+JAX_PLATFORMS=cpu "$MITJAX_PYTHON" -m pytest -m smoke -q

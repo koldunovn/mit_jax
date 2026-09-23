@@ -1,8 +1,9 @@
 # ECCO v4r4 input data and reference products
 
-Everything lives under `/work/ab0995/a270088/MIT/data/eccov4r4/` (home quota is full). Staged 2026-09-23 from
-PO.DAAC with `scripts/fetch_eccov4r4.py` (stdlib; Earthdata login from `~/.netrc`; system CA bundle, because the
-mambaforge one is broken). Checked by `scripts/tests/test_data_manifest.py` (tier 1).
+Everything lives under `$MITJAX_DATA` (`mitgcm_jax/paths.py`; on Levante `/work/ab0995/a270088/MIT/data/eccov4r4/`, home
+quota is full). Staged 2026-09-23 from PO.DAAC with `scripts/fetch_eccov4r4.py` (stdlib; Earthdata login from
+`~/.netrc`; system CA bundle, because the mambaforge one is broken). Checked by `scripts/tests/test_data_manifest.py`
+(tier 1).
 
 ## Sources
 

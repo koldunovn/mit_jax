@@ -94,6 +94,7 @@ import numpy as np  # noqa: E402
 from jax import lax  # noqa: E402
 
 import mitgcm_jax  # noqa: E402,F401  (x64)
+from mitgcm_jax import paths  # noqa: E402
 from mitgcm_jax.io.dump import DumpSet, read_file  # noqa: E402
 from mitgcm_jax.layout import Layout  # noqa: E402
 from mitgcm_jax.parallel.exchange import default_exchanger  # noqa: E402
@@ -103,7 +104,7 @@ from mitgcm_jax.pkgs import seaice_model as sm  # noqa: E402
 from mitgcm_jax.tests import oracle  # noqa: E402
 
 L = Layout()
-GRID_DIR = Path("/work/ab0995/a270088/MIT/data/eccov4r4/native_grid_files")  # model.GRID_DIR
+GRID_DIR = paths.GRID_DIR  # model.GRID_DIR
 ITS = (1, 2, 3)
 CARRY = sm.SEAICE_CARRIED + ("sIceLoad",)
 PRESCRIBED = tuple(k for k in sm.INPUTS if k not in CARRY)

@@ -1,16 +1,15 @@
 """LLC90 compact <-> tiles mapping, checked against the PO.DAAC V4r4 geometry product (the comparator for every
 Fortran-vs-product check, and the layout the JAX grid loader will use)."""
 
-from pathlib import Path
-
 import netCDF4
 import numpy as np
 
+from mitgcm_jax import paths
 from mitgcm_jax.io.llc import (FACET_SHAPE, compact_to_facets, compact_to_tiles, facets_to_tiles,
                                tiles_to_compact)
 from mitgcm_jax.io.mds import read_bin
 
-DATA = Path("/work/ab0995/a270088/MIT/data/eccov4r4")
+DATA = paths.DATA                  # $MITJAX_DATA
 GEOM = DATA / "products_fixed/ECCO_L4_GEOMETRY_LLC0090GRID_V4R4/GRID_GEOMETRY_ECCO_V4r4_native_llc0090.nc"
 
 

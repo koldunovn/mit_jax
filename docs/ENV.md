@@ -11,6 +11,9 @@ and the tier-2 adjoint regression, not only the forward.
 
 ## Create
 
+Other machines (conda or venv, aarch64/GH200 nodes, NASA NAS Cabeus) and the installation check
+(`scripts/check_env.py`): `docs/RUN_ONE_YEAR.md` section 2. On Levante:
+
 ```bash
 E=/work/ab0995/a270088/mambaforge
 $E/bin/mamba create -y -p $E/envs/mitgcm-jax python=3.12.13 pip

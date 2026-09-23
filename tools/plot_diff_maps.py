@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """2-D maps of differences between runs (JAX vs Fortran, Fortran vs Fortran), plotted with nereus.
 
-Runs in the nereus env (not the model env):
-    /work/ab0995/a270088/mambaforge/envs/nereus/bin/python tools/plot_diff_maps.py ff_year OUT.png
-    /work/ab0995/a270088/mambaforge/envs/nereus/bin/python tools/plot_diff_maps.py full_month OUT.png [--jax STATE]
+Runs in the nereus env (not the model env; docs/RUN_ONE_YEAR.md):
+    python tools/plot_diff_maps.py ff_year OUT.png [--jax STATE] [--mesh DIR]
+    python tools/plot_diff_maps.py full_month OUT.png [--jax STATE] [--mesh DIR]
+    python tools/plot_diff_maps.py full_year OUT.png --jax STATE [--mesh DIR]
+
+The Fortran runs are read by their names below from $MITJAX_REFERENCE_RUNS (mitgcm_jax/paths.py); --mesh is a
+directory with the LLC90 grid files XC, YC, hFacC (a Fortran run directory, or the output of tools/write_grid_mds.py).
 
 Signed differences on wet points only (surface hFacC > 0), linear symmetric colour scales (Nikolay 2026-09-23: no
 log scale), float64 restarts (pickup*.ckptA) on both sides. Figures:
@@ -24,21 +28,22 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parents[1]
-RUNS = Path("/work/ab0995/a270088/MIT/reference/runs")
-JAXRUNS = Path("/work/ab0995/a270088/MIT/runs_jax")
-MESH = RUNS / "smoke_ff_v3_forced_jd_3steps"          # any run dir with the LLC90 grid files (XC, YC, hFacC ...)
-OL = 4                                                  # JAX halo width (mitgcm_jax/layout.py)
 
 
-def _llc():
-    """mitgcm_jax/io/llc.py loaded by path (numpy only; importing the package would need jax)."""
-    spec = importlib.util.spec_from_file_location("llc", REPO / "mitgcm_jax" / "io" / "llc.py")
+def _load(name, rel):
+    """A numpy/stdlib-only module of mitgcm_jax loaded by path (importing the package would need jax)."""
+    spec = importlib.util.spec_from_file_location(name, REPO / rel)
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
     return m
 
 
-LLC = _llc()
+LLC = _load("llc", "mitgcm_jax/io/llc.py")
+PATHS = _load("mitgcm_jax_paths", "mitgcm_jax/paths.py")
+RUNS = PATHS.REFERENCE_RUNS                             # $MITJAX_REFERENCE_RUNS
+JAXRUNS = PATHS.RUNS_JAX                                # $MITJAX_RUNS_JAX
+MESH = RUNS / "smoke_ff_v3_forced_jd_3steps"          # any run dir with the LLC90 grid files (XC, YC, hFacC ...)
+OL = 4                                                  # JAX halo width (mitgcm_jax/layout.py)
 
 
 def jax_state(path, var, k=None):
@@ -66,7 +71,7 @@ def fortran_pickup(run, name, suffix="ckptA", pickup="pickup_seaice"):
 
 def mesh():
     import nereus as nr
-    m = nr.mitgcm.load_mesh(MESH, mask_land=True)
+    m = nr.mitgcm.load_mesh(MESH, mask_land=True)          # MESH: --mesh
     return m["lon"].values, m["lat"].values, m["land_mask"].values
 
 
@@ -133,7 +138,7 @@ def _row_cbar(fig, plt, axes_row_bottom, vmax, label):
     cb.update_ticks()
 
 
-def fig_ff_year(out):
+def fig_ff_year(out, jax_path=None):
     """End of 1992 (it 8761), float64 restarts, signed differences on linear symmetric scales (one colour limit per
     row: the 99.9th percentile of |d| over the row's three panels; hotspots saturate). Rows: SST, theta at 300 m,
     SSS, SSH. Columns: JAX - Fortran 96 ranks, Fortran 13 ranks - Fortran 96 ranks, JAX - Fortran 13 ranks."""
@@ -144,7 +149,7 @@ def fig_ff_year(out):
     import nereus as nr
 
     lon, lat, land = mesh()
-    jf = JAXRUNS / "ff_prod_1992_gpu_v2" / "part2" / "state_final.npz"
+    jf = jax_path or JAXRUNS / "ff_prod_1992_gpu_v2" / "part2" / "state_final.npz"
     f13y, f96y = "ref_ff_serial13_1year", "ref_ff_mpi96_1year"
     # pickup records: Theta 100..149, Salt 150..199 (k = 0..49), EtaN 400; RC(19) = -299.9 m
     rows = [("SST", "theta", 100, 0, "degC"), ("theta at 300 m", "theta", 119, 19, "degC"),
@@ -227,10 +232,16 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("figure", choices=("ff_year", "full_month", "full_year"))
     ap.add_argument("out")
-    ap.add_argument("--jax", default=None, help="full_month: a JAX full-model state .npz at it 745")
+    ap.add_argument("--jax", default=None,
+                    help="JAX state .npz (run_jax state_final.npz / state_<iter>.npz): ff_year at it 8761 (default: "
+                         "the validated A100 run in $MITJAX_RUNS_JAX), full_month at it 745, full_year at it 8761")
+    ap.add_argument("--mesh", default=None, help="directory with the grid files XC, YC, hFacC (default: a Fortran run)")
     a = ap.parse_args(argv)
+    global MESH
+    if a.mesh:
+        MESH = Path(a.mesh)
     if a.figure == "ff_year":
-        fig_ff_year(a.out)
+        fig_ff_year(a.out, a.jax)
     elif a.figure == "full_month":
         fig_full_month(a.out, a.jax)
     else:

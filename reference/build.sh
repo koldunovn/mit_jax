@@ -12,16 +12,20 @@
 #
 # Code dir = the tree's override code (+ SIZE.h for serial13 / mpi13), full packages.conf (autodiff/ctrl/ecco compiled:
 # ALLOW_AUTODIFF changes forward branches, docs/OVERRIDES.md). Each build goes to a NEW directory
-# /work/.../MIT/reference/build/<tree>_<layout>_<timestamp>; the executable is frozen as
-# /work/.../MIT/reference/bin/mitgcmuv_<tree>_<layout>_<sha256[:12]> with a .txt provenance file.
+# $MITJAX_REFERENCE/build/<tree>_<layout>_<timestamp>; the executable is frozen as
+# $MITJAX_REFERENCE/bin/mitgcmuv_<tree>_<layout>_<sha256[:12]> with a .txt provenance file (mitgcm_jax/paths.py).
+# Needs MITgcm checkpoint66g and ECCO-v4-Configurations cloned into the repository root (docs/RUN_ONE_YEAR.md).
+# The module names and the optfile are DKRZ Levante's (gfortran 11.2, OpenMPI 4.1.2, netCDF-Fortran 4.5.3).
 # Nothing is deleted or overwritten.
 set -euo pipefail
 
 TREE=${1:?tree: full | ff}; LAYOUT=${2:?layout: mpi96 | serial13 | mpi13}
-REPO=/home/a/a270088/MIT
+REPO=${MITJAX_TREE:-$(cd "$(dirname "$0")/.." && pwd)}
+PY=${MITJAX_PYTHON:-/work/ab0995/a270088/mambaforge/envs/mitgcm-jax/bin/python}
+eval "$("$PY" "$REPO/mitgcm_jax/paths.py" --sh)"
 ROOT=$REPO/MITgcm_c66g
 V4=$REPO/"ECCO-v4-Configurations/ECCOv4 Release 4"
-WORK=/work/ab0995/a270088/MIT/reference
+WORK=$MITJAX_REFERENCE
 case $TREE in full) CODE="$V4/code" ;; ff) CODE="$V4/flux-forced/code" ;; *) echo "bad tree $TREE"; exit 2 ;; esac
 case $LAYOUT in mpi96|mpi13) MPIFLAG=-mpi ;; serial13) MPIFLAG= ;; *) echo "bad layout $LAYOUT"; exit 2 ;; esac
 
@@ -53,7 +57,7 @@ if [ "$TREE" = ff ]; then
 fi
 cp "$REPO/reference/optfile_levante_gfortran" "$BUILD/"
 if [ "${JAXDUMP:-0}" = 1 ]; then
-  /work/ab0995/a270088/mambaforge/envs/mitgcm-jax/bin/python "$REPO/reference/jaxdump/instrument.py" "$TREE" "$BUILD/code" > "$BUILD/instrument.log"
+  "$PY" "$REPO/reference/jaxdump/instrument.py" "$TREE" "$BUILD/code" > "$BUILD/instrument.log"
 fi
 if [ "${GCOV:-0}" = 1 ]; then
   cat >> "$BUILD/optfile_levante_gfortran" <<'EOG'

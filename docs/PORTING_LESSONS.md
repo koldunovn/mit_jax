@@ -486,3 +486,21 @@ Production runs may use XLA defaults (ulp-level differences only).
 - Pass-through fields: ecco = all 18 carried fields; no_dynamics = UICE, VICE + the LSR-written arrays (UICE cotangent
   accumulates linearly, 2 -> 90 over 48 steps); full = none. Find them with a one-step single-field probe.
 - The tight LSR runs on one core: pack processes, and size +-h pairs against the time limit.
+
+## Configurable paths, JAX-only run directories, one-year run guide (2026-09-24)
+- One place for machine paths: `mitgcm_jax/paths.py` (`MITJAX_WORK`, `MITJAX_DATA`, `MITJAX_GRID_DIR`,
+  `MITJAX_REFERENCE[_RUNS]`, `MITJAX_RUNS[_JAX]`), stdlib only. Tools that run without jax (plotting env, fetch script)
+  load it by file path, because importing the `mitgcm_jax` package imports jax; shell jobs `eval` its `--sh` output.
+- Slurm runs a spool copy of the batch script, so `$0` does not locate the repository; `scontrol show job
+  $SLURM_JOB_ID` prints the original path (`Command=`, absolute even for a relative submission). Scripts try `$0`
+  first (plain `bash script`), then `Command=`, and fail with a message when neither holds `mitgcm_jax/paths.py`.
+- `from mitgcm_jax import paths` in `make_rundir.py` clashed with a local variable `paths` in `main()`
+  (UnboundLocalError at the first use): import the names where a function already uses the word.
+- Before/after check without a worktree: `git archive HEAD | tar -x` into scratch; `run_jax.py` puts its own
+  repository first on `sys.path`, and the editable install's finder is appended to `sys.meta_path`, so the copy runs
+  its own code. 2-step runs (gate flags) of the old and new code, and from the old and the `--no-binary` run
+  directories, were bitwise identical (monitor.txt and every array).
+- The Fortran grid files for plotting (XC, YC, RAC, Depth, hFacC, RC, DRF) are reproduced bitwise (float32) from the
+  JAX grid (`tools/write_grid_mds.py`), so movies need no Fortran run.
+- NASA CMR sometimes times out or returns partial granule lists (2026-09-24: `list` found 3 of 4 small archives, then
+  nothing); "no granules" from `fetch_eccov4r4.py list` is not proof that a file was withdrawn.

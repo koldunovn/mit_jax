@@ -60,14 +60,15 @@ import jax  # noqa: E402
 import jax.numpy as jnp  # noqa: E402
 
 import mitgcm_jax  # noqa: E402,F401  (x64)
+from mitgcm_jax import paths  # noqa: E402
 from mitgcm_jax.adjoint import checkpoint as ck  # noqa: E402
 from mitgcm_jax.adjoint import grad as gr  # noqa: E402
 from mitgcm_jax.adjoint.modes import EXACT, AdjointConfig  # noqa: E402
 from mitgcm_jax.params_io import RunNamelists  # noqa: E402
 from mitgcm_jax.state import State  # noqa: E402
 
-RUNDIR = Path("/work/ab0995/a270088/MIT/reference/runs/ref_ff_serial13_1day")
-CACHE = Path("/work/ab0995/a270088/MIT/runs/adjoint/init_ref_ff_serial13_1day")
+RUNDIR = paths.REFERENCE_RUNS / "ref_ff_serial13_1day"
+CACHE = paths.RUNS / "adjoint" / "init_ref_ff_serial13_1day"
 MIXING = ("kapGM", "kapRedi", "diffKr")
 # prepare_run_adjsen.py: kkk0 = 15-1, kkk1 = 20-1 (0-based levels 14..19); XC >= 120; 5 <= YC <= 16 (YC <= 151)
 BOX = {"xmin": 120.0, "ylo": 5.0, "yhi": 16.0, "yc_max_literal": 151.0, "k0": 14, "k1": 19}
