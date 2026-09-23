@@ -68,5 +68,9 @@ Read `CLAUDE.md` (project rules) first. This file is the working recipe every ke
      env JAX_PLATFORMS=cpu /work/ab0995/a270088/mambaforge/envs/mitgcm-jax/bin/python -m pytest -q <file>`
   (from `/home/a/a270088/MIT`). The login node may only run `pytest -m smoke` (seconds).
 - Python: `/work/ab0995/a270088/mambaforge/envs/mitgcm-jax/bin/python` (jax 0.10.1, pinned).
+- **No FMA on CPU for gates:** `conftest.py` sets `XLA_FLAGS=--xla_cpu_max_isa=AVX` (XLA:CPU's default AVX2 fuses
+  a*b+c into FMA; the oracle is built with -ffp-contract=off). Standalone scripts must set it themselves:
+  `env XLA_FLAGS=--xla_cpu_max_isa=AVX JAX_PLATFORMS=cpu python ...`. With it, pointwise kernels can match bitwise.
+- Dev allocation now RUNNING: interactive partition job 27635402 — use `srun --jobid=27635402 --overlap -n1 -c12 --mem=24G ...`.
 - Never delete anything (no `rm`, no `git clean`); never `scancel`. Scratch files go under
   `/work/ab0995/a270088/MIT/dev/<your area>/`.
