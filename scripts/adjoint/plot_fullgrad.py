@@ -135,14 +135,15 @@ def traces(a, fig_dir):
     rs = rows(a.runs.split(","))
     sc = [r for r in rs if r["action"] == "screen"]
     if sc:
-        groups = ("dynamic", "theta", "prognostic", "seaice")
-        fig, axs = plt.subplots(1, 4, figsize=(19, 4.3))
+        groups = ("dynamic", "theta", "prognostic", "seaice", "seaice_thermo")
+        fig, axs = plt.subplots(1, 5, figsize=(23, 4.3))
         for r in sorted(sc, key=lambda r: (r["days"], r["mode"])):
             ft = r.get("field_trace") or []
             cst = set(r.get("carried_constants") or ())
             sel = {"dynamic": lambda k: k not in cst, "theta": lambda k: k == "theta",
                    "prognostic": lambda k: k in ("theta", "salt", "uVel", "vVel", "etaN"),
-                   "seaice": lambda k: k in ("AREA", "HEFF", "HSNOW", "TICES", "UICE", "VICE")}
+                   "seaice": lambda k: k in ("AREA", "HEFF", "HSNOW", "TICES", "UICE", "VICE"),
+                   "seaice_thermo": lambda k: k in ("AREA", "HEFF", "HSNOW", "TICES")}
             for ax, gname in zip(axs, groups):
                 tr = np.array([np.sqrt(sum(v * v for k, v in f.items() if sel[gname](k))) for f in ft])
                 x = -np.arange(len(tr)) * r["chunk"] / 24.0 + r["days"]
