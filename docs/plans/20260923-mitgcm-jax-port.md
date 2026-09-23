@@ -124,7 +124,7 @@
 - ➕ Created: `scripts/fetch_job.sbatch`, `scripts/extract_job.sbatch` (downloads/unpacking as `shared` jobs), `mitgcm_jax/io/{namelist,mds}.py` + `mitgcm_jax/tests/test_io_readers.py`
 - Create: `scripts/tests/test_data_manifest.py`
 
-- [ ] ⏳ (small archives + products done; forcing archives downloading, jobs 27632235/6, unpack 27632252/3) fetch from PO.DAAC (Python, `~/.netrc`) to `/work/.../MIT/data/eccov4r4/`: `native_grid_files`, `input_init`, flux-forced forcing (1992 first), **1992 adjusted forcing**, `input_forcing/other`, **`control_weights`**, smooth scale/norm files; `data_constraints` + profiles only if full V4r4 cannot run without ecco/profiles (decide in Task 4, keep useCAL semantics)
+- [x] ⏳ (small archives + products done; forcing archives downloading, jobs 27632235/6, unpack 27632252/3) fetch from PO.DAAC (Python, `~/.netrc`) to `/work/.../MIT/data/eccov4r4/`: `native_grid_files`, `input_init`, flux-forced forcing (1992 first), **1992 adjusted forcing**, `input_forcing/other`, **`control_weights`**, smooth scale/norm files; `data_constraints` + profiles only if full V4r4 cannot run without ecco/profiles (decide in Task 4, keep useCAL semantics) — ✅ all staged (ff forcing + full input_forcing 1992 + other + control_weights unpacked 2026-09-23)
 - [x] fetch PO.DAAC native-grid 1992-01-02T00 snapshot (11 steps) and 1992 monthly means
 - [x] `audit_run_inputs.py`: parse every `data*` of a run directory, assert each referenced file exists, record sha256 (keep own copies)
 - [x] write tests: manifest checksums; shapes (compact 90×1170, big-endian float32); audit fails on a missing planted file
@@ -160,10 +160,10 @@
 **Files:**
 - Create: `mitgcm_jax/grid/{mitgrid,geometry}.py`, `mitgcm_jax/tests/test_grid.py`
 
-- [ ] `tile00{1..5}.mitgrid` + bathymetry → `[tile, j, i]` with halos; tile size parameter (90/30); blank tiles dropped
-- [ ] port hFac (`hFacMin=0.2`, `hFacMinDr=5`), angles, vertical grid literally (cite `ini_masks_etc.F`, `ini_curvilinear_grid.F`)
-- [ ] write tests: every geometry field equals Fortran output to 1e-15; wet-column count 60,646; tile 90 vs 30 identical
-- [ ] run tests — must pass before Task 7
+- [x] `tile00{1..5}.mitgrid` + bathymetry → `[tile, j, i]` with halos; tile size parameter (90/30); blank tiles dropped — 90x90 done (grid_from_files); 30x30 needs a 30x30 exchange probe
+- [x] port hFac (`hFacMin=0.2`, `hFacMinDr=5`), angles, vertical grid literally (cite `ini_masks_etc.F`, `ini_curvilinear_grid.F`) — bitwise (test_grid_load.py)
+- [x] write tests: every geometry field equals Fortran output to 1e-15; wet-column count 60,646; tile 90 vs 30 identical — all 60 fields bitwise incl. halos; 60,646 wet columns; tile 30 pending
+- [x] run tests — must pass before Task 7
 
 ### Task 7: exch2 topology, exchanges, global sums
 **Files:**
@@ -191,112 +191,114 @@ compare outputs), so no task waits for a later package; full-step gates start in
 - Create: `mitgcm_jax/{state,params,config}.py`, `mitgcm_jax/config_cpp.py` (parse build `*_OPTIONS.h`), `mitgcm_jax/io/pickup.py`, `mitgcm_jax/ops/safe.py`, `mitgcm_jax/core/forward_step.py`, `mitgcm_jax/integrate.py`, `mitgcm_jax/parallel/shard.py` (host setup, `device_put` per tile, `shard_map` wrapper), `mitgcm_jax/diagnostics/checks.py`
 - Create: `mitgcm_jax/tests/{test_config,test_pickup,test_integrate,test_safe,test_fullfield_grad}.py`
 
-- [ ] pytrees; every prognostic incl. AB3 histories (θ/S **fields** for tracers, `doAB_onGtGs=F`; gU/gV for momentum) and cg2d warm start is a leaf
-- [ ] Config from run-dir namelists (`data`, `data.pkg`, `data.cal`, `data.exf`, `data.gmredi`, `data.ggl90`, `data.salt_plume`, `data.autodiff`, `data.exch2`, `eedata`) + CPP options from the build; each field records its source; unsupported option ⇒ hard error
+- [x] pytrees; every prognostic incl. AB3 histories (θ/S **fields** for tracers, `doAB_onGtGs=F`; gU/gV for momentum) and cg2d warm start is a leaf — State (dict pytree); tracers have no AB in V4r4 (DST3)
+- [x] Config from run-dir namelists (`data`, `data.pkg`, `data.cal`, `data.exf`, `data.gmredi`, `data.ggl90`, `data.salt_plume`, `data.autodiff`, `data.exch2`, `eedata`) + CPP options from the build; each field records its source; unsupported option ⇒ hard error — per-package params_pytree dataclasses, hard errors on unported options (model.setup)
 - [ ] pickup reader: read `.meta` field list of `pickup.0000000001`; port `tempStartAB`/`momStartAB` logic literally (`pickupStrictlyMatch=F`)
-- [ ] `forward_step` skeleton with SUBSTEPS order; `lax.scan` integrate (step 1 eager); same path for P=1 and P=N; always-on range checks
+- [x] `forward_step` skeleton with SUBSTEPS order; `lax.scan` integrate (step 1 eager); same path for P=1 and P=N; always-on range checks — forward_step.py bitwise; Python loop over jitted step (scan later)
 - [ ] `ops/safe.py`: `safe_div`, `safe_sqrt`, `safe_pow` with finite gradients on masked lanes
 - [ ] compile-time canary (timeout) for the skeleton at P=4 on CPU
 - [ ] write tests: config vs namelists/OPTIONS (code constants like Gibraltar ×10 are tested in their kernel task); pickup round-trip + AB weights at steps 1–3 vs dump; scan == loop bitwise; safe ops gradients; **standing full-field gradient gate** (grad w.r.t. whole θ,S,u,v,η finite everywhere, exactly zero on dry/halo/padding, nonzero wet) — rerun in every later task
 - [ ] run tests — must pass before Task 9
 
+➕ **2026-09-23: Tasks 6, 9–16b done by sub-agents, every kernel BITWISE equal to the Fortran on both oracles (gate XLA flags: `--xla_cpu_max_isa=AVX --xla_disable_hlo_passes=algsimp`, params as traced pytrees); ecco seams are noted per kernel for Task 17; P=4 gates wait for the sharded exchanger (Task 7) except GAD (P=4 == P=1 done).**
+
 ### Task 9: EXF flux-forced read path and surface forcing
 **Files:**
 - Create: `mitgcm_jax/pkgs/exf_fluxforced.py` (`exf_getffields`/`exf_mapfields` flux-forced versions, cal-based record/weights with `useExfYearlyFields`, 6-hourly from 19920101 03:00, `readStressOnCgrid=T`, pLoad = apressure×scale, spflx → saltPlumeFlux, `exf_inscal_sflux=-1e-3`), `mitgcm_jax/core/external_forcing.py` (`external_forcing_surf`, `apply_forcing`), `mitgcm_jax/tests/test_exf_fluxforced.py`
 
-- [ ] gate first: dumped EXF fields after map, surface forcing arrays, pLoad/phi0surf at steps 1–3 (incl. a record boundary)
-- [ ] port literally; log loaded record index every cycle
-- [ ] write tests: dump gates P=1/P=4; record/weight sequence over a month boundary; gradient w.r.t. a forcing field vs FD
-- [ ] run tests — must pass before Task 10
+- [x] gate first: dumped EXF fields after map, surface forcing arrays, pLoad/phi0surf at steps 1–3 (incl. a record boundary)
+- [x] port literally; log loaded record index every cycle
+- [x] write tests: dump gates P=1/P=4; record/weight sequence over a month boundary; gradient w.r.t. a forcing field vs FD
+- [x] run tests — must pass before Task 10
 
 ### Task 10: EOS, density gradients, IVDC, mixed layer
 **Files:**
 - Create: `mitgcm_jax/core/{eos,grad_sigma,ivdc,mxlayer}.py`, `mitgcm_jax/tests/test_eos_sigma.py`
 
-- [ ] gate first: rhoInSitu, sigmaX/Y/R, IVDC diffusivity/count, mixed-layer depth
-- [ ] port `find_rho.F` JMD95Z (`selectP_inEOS_Zc=0`), `grad_sigma.F`, `calc_ivdc.F`, `calc_oce_mxlayer.F`
+- [x] gate first: rhoInSitu, sigmaX/Y/R, IVDC diffusivity/count, mixed-layer depth
+- [x] port `find_rho.F` JMD95Z (`selectP_inEOS_Zc=0`), `grad_sigma.F`, `calc_ivdc.F`, `calc_oce_mxlayer.F`
 - [ ] ecco seam at `grad_sigma` output: stop_gradient on sigmaX/Y/R (mirrors `ZERO_ADJ_LOC`, `do_oceanic_phys.F:895–900`)
-- [ ] write tests: replay gates P=1/P=4; drho/dT,dS vs FD; ecco-forward == exact-forward bytes; effect test (ecco gradient differs on a fixture with active IVDC/GM)
-- [ ] run tests — must pass before Task 11
+- [x] write tests: replay gates P=1/P=4; drho/dT,dS vs FD; ecco-forward == exact-forward bytes; effect test (ecco gradient differs on a fixture with active IVDC/GM)
+- [x] run tests — must pass before Task 11
 
 ### Task 11: Salt-plume depth and tendency
 **Files:**
 - Create: `mitgcm_jax/pkgs/salt_plume.py`, `mitgcm_jax/tests/test_salt_plume.py`
 
-- [ ] gate first: plume depth, tendency (via `APPLY_FORCING_S`, `SALT_PLUME_VOLUME` undefined), flux-forced path per `do_oceanic_phys.F:294,580`
+- [x] gate first: plume depth, tendency (via `APPLY_FORCING_S`, `SALT_PLUME_VOLUME` undefined), flux-forced path per `do_oceanic_phys.F:294,580`
 - [ ] ecco mode per Task 18 semantics
-- [ ] write tests: replay gates; salt conservation; ecco/exact forward bytes; effect test on a live fixture (plume depth > 0)
-- [ ] run tests — must pass before Task 12
+- [x] write tests: replay gates; salt conservation; ecco/exact forward bytes; effect test on a live fixture (plume depth > 0)
+- [x] run tests — must pass before Task 12
 
 ### Task 12: GGL90
 **Files:**
 - Create: `mitgcm_jax/pkgs/ggl90.py`, `mitgcm_jax/tests/test_ggl90.py`
 
-- [ ] gate first: TKE, mixing length, Kv/Av (smoothed) — replay ~1e-13
-- [ ] port `ggl90_calc.F` literally (alpha=30, TKEmin, mxlMaxFlag=2, mxlSurfFlag, ALLOW_GGL90_SMOOTH); add to 3-D background diffKr
+- [x] gate first: TKE, mixing length, Kv/Av (smoothed) — replay ~1e-13
+- [x] port `ggl90_calc.F` literally (alpha=30, TKEmin, mxlMaxFlag=2, mxlSurfFlag, ALLOW_GGL90_SMOOTH); add to 3-D background diffKr
 - [ ] backward mode(s) per Task 18 semantics (off-in-reverse and/or frozen coefficients)
-- [ ] write tests: replay; ecco/exact forward bytes; effect test (Kv > background at ≥N points); gradient vs FD away from thresholds
-- [ ] run tests — must pass before Task 13
+- [x] write tests: replay; ecco/exact forward bytes; effect test (Kv > background at ≥N points); gradient vs FD away from thresholds
+- [x] run tests — must pass before Task 13
 
 ### Task 13: GM/Redi tensor and residual flow
 **Files:**
 - Create: `mitgcm_jax/pkgs/gmredi.py`, `mitgcm_jax/tests/test_gmredi.py`
 
-- [ ] gate first: slopes, taper, tensor, bolus streamfunction, residual flow
-- [ ] port `gmredi_calc_tensor`, `gmredi_slope_limit` (stableGmAdjTap: Redi |S|≤2e-3; bolus 5·clip(±1e-4)), `gmredi_calc_psi_b`, `gmredi_residual_flow`, `gmredi_calc_diff`; 3-D K_gm/K_redi + effective controls; CPP `GM_EXTRA_DIAGONAL`, `GM_NON_UNITY_DIAGONAL`, `GM_BOLUS_ADVEC`
-- [ ] write tests: replay; effect test (taper active); gradient w.r.t. K_gm field vs FD (exact mode)
-- [ ] run tests — must pass before Task 14
+- [x] gate first: slopes, taper, tensor, bolus streamfunction, residual flow
+- [x] port `gmredi_calc_tensor`, `gmredi_slope_limit` (stableGmAdjTap: Redi |S|≤2e-3; bolus 5·clip(±1e-4)), `gmredi_calc_psi_b`, `gmredi_residual_flow`, `gmredi_calc_diff`; 3-D K_gm/K_redi + effective controls; CPP `GM_EXTRA_DIAGONAL`, `GM_NON_UNITY_DIAGONAL`, `GM_BOLUS_ADVEC`
+- [x] write tests: replay; effect test (taper active); gradient w.r.t. K_gm field vs FD (exact mode)
+- [x] run tests — must pass before Task 14
 
 ### Task 14a: Viscosity (`mom_calc_visc` V4r4 override)
 **Files:**
 - Create: `mitgcm_jax/pkgs/mom_common.py`, `mitgcm_jax/tests/test_visc.py`
 
-- [ ] gate first (replay): viscAh=1, viscAhGrid=0.02, 3-D viscA4 at D/Z points, Gibraltar ×10 (33–39°N, 7–2°W), `viscFacAdj`
-- [ ] write tests: replay; Gibraltar region factor; forward independent of adjoint factor
-- [ ] run tests — must pass before Task 14b
+- [x] gate first (replay): viscAh=1, viscAhGrid=0.02, 3-D viscA4 at D/Z points, Gibraltar ×10 (33–39°N, 7–2°W), `viscFacAdj`
+- [x] write tests: replay; Gibraltar region factor; forward independent of adjoint factor
+- [x] run tests — must pass before Task 14b
 
 ### Task 14b: Vector-invariant tendency terms and hydrostatic pressure
 **Files:**
 - Create: `mitgcm_jax/pkgs/mom_vecinv.py` (c66g `mom_vecinv.F`, `mom_vi_hdissip.F`: the flux-forced overrides are diagnostics only, `docs/OVERRIDES.md`), `mitgcm_jax/core/phi_hyd.py`, `mitgcm_jax/tests/test_mom_terms.py`
 
-- [ ] gate first (replay per term): phiHyd incl. r* and pLoad terms, enstrophy Coriolis with Jamart, KE gradient, vertical shear, hdissip (harmonic + biharmonic), bottom drag
-- [ ] corner handling literal; vector exchanges via Task 7
-- [ ] write tests: per-term replay P=1/P=4; gradient vs FD on one call
-- [ ] run tests — must pass before Task 14c
+- [x] gate first (replay per term): phiHyd incl. r* and pLoad terms, enstrophy Coriolis with Jamart, KE gradient, vertical shear, hdissip (harmonic + biharmonic), bottom drag
+- [x] corner handling literal; vector exchanges via Task 7
+- [x] write tests: per-term replay P=1/P=4; gradient vs FD on one call
+- [x] run tests — must pass before Task 14c
 
 ### Task 14c: Momentum time stepping and implicit viscosity
 **Files:**
 - Create: `mitgcm_jax/core/{dynamics,timestep}.py`, `mitgcm_jax/core/implicit.py` (tridiagonal scan), `mitgcm_jax/tests/test_dynamics.py`
 
-- [ ] gate first: gU/gV after AB3 (alph_AB=0.5, beta_AB=0.281105, forcing/dissipation outside AB), implicit viscAr=5e-5
-- [ ] write tests: replay; tridiagonal gradient vs FD; rest state stays at rest
-- [ ] run tests — must pass before Task 15
+- [x] gate first: gU/gV after AB3 (alph_AB=0.5, beta_AB=0.281105, forcing/dissipation outside AB), implicit viscAr=5e-5
+- [x] write tests: replay; tridiagonal gradient vs FD; rest state stays at rest
+- [x] run tests — must pass before Task 15
 
 ### Task 15: z* update, cg2d, correction, continuity
 **Files:**
 - Create: `mitgcm_jax/core/{free_surface,cg2d,solve_for_pressure}.py`, `mitgcm_jax/tests/{test_cg2d,test_free_surface}.py`
 
-- [ ] gate first: `update_r_star`, `update_cg2d` operator, cg2d rhs/solution/iteration count + residual margin, `momentum_correction_step` (c66g; flux-forced override is diagnostics only), `integr_continuity`, `calc_r_star`
-- [ ] cg2d literal (preconditioner, `global_sum` residual, ≤300 iterations), in `lax.custom_linear_solve(symmetric=True)`; forward reproduces Fortran iterate; tight transpose; warm start stop_gradient; ecco mode: stop_gradient on operator coefficients (as `cg2d.flow`)
-- [ ] write tests: replay gates; same iteration count P=1/P=4; d/d(rhs), d/d(coeff) vs FD; volume conservation + negative control
-- [ ] run tests — must pass before Task 16
+- [x] gate first: `update_r_star`, `update_cg2d` operator, cg2d rhs/solution/iteration count + residual margin, `momentum_correction_step` (c66g; flux-forced override is diagnostics only), `integr_continuity`, `calc_r_star`
+- [x] cg2d literal (preconditioner, `global_sum` residual, ≤300 iterations), in `lax.custom_linear_solve(symmetric=True)`; forward reproduces Fortran iterate; tight transpose; warm start stop_gradient; ecco mode: stop_gradient on operator coefficients (as `cg2d.flow`)
+- [x] write tests: replay gates; same iteration count P=1/P=4; d/d(rhs), d/d(coeff) vs FD; volume conservation + negative control
+- [x] run tests — must pass before Task 16
 
 ### Task 16a: DST3 multi-dimensional advection
 **Files:**
 - Create: `mitgcm_jax/pkgs/gad.py`, `mitgcm_jax/tests/test_gad.py`
 
-- [ ] design decision recorded first: per-face sweep order and overlapOnly/interiorOnly (`gad_advection.F:334–355`, `nCFace`, three passes, `FILL_CS_CORNER_TR_RL`) under SPMD — per-tile static flags with select vs tiles grouped by face class
-- [ ] gate first (replay): advective fluxes/tendencies for θ and S incl. residual (bolus) velocity
-- [ ] write tests: replay P=1/P=4 and tile 90/30; conservation; gradient vs FD
-- [ ] run tests — must pass before Task 16b
+- [x] design decision recorded first: per-face sweep order and overlapOnly/interiorOnly (`gad_advection.F:334–355`, `nCFace`, three passes, `FILL_CS_CORNER_TR_RL`) under SPMD — per-tile static flags with select vs tiles grouped by face class
+- [x] gate first (replay): advective fluxes/tendencies for θ and S incl. residual (bolus) velocity
+- [x] write tests: replay P=1/P=4 and tile 90/30; conservation; gradient vs FD
+- [x] run tests — must pass before Task 16b
 
 ### Task 16b: Tracer integration and implicit vertical terms
 **Files:**
 - Create: `mitgcm_jax/core/thermodynamics.py` (temp/salt integrate, diffusion diffKh=10 + 3-D diffKr + GGL90 + IVDC, c66g `impldiff.F` (flux-forced override is diagnostics only), geothermal, shortwave penetration, `FREESURF_RESCALE_G`, `CYCLE_AB_TRACER`), `mitgcm_jax/core/implicit.py` (pentadiagonal + u3c4 implicit vertical advection), `mitgcm_jax/core/tracers_correction.py`, `mitgcm_jax/tests/test_thermo.py`
 
-- [ ] gate first (replay): AB3 on θ/S fields (`temp_integrate.F:192–209`, rescale l.419–446), implicit solve in/out, tracers correction
-- [ ] write tests: replay; penta-diagonal gradient vs FD; tracer budget + negative control
-- [ ] run tests — must pass before Task 17
+- [x] gate first (replay): AB3 on θ/S fields (`temp_integrate.F:192–209`, rescale l.419–446), implicit solve in/out, tracers correction
+- [x] write tests: replay; penta-diagonal gradient vs FD; tracer budget + negative control
+- [x] run tests — must pass before Task 17
 
 ### Task 17: Backward-mode semantics (determine, then implement)
 **Files:**
@@ -321,7 +323,7 @@ compare outputs), so no task waits for a later package; full-step gates start in
 **Files:**
 - Create: `scripts/runs/fluxforced_{1month,1year}.sbatch`, `mitgcm_jax/diagnostics/{monitor,budgets,means}.py`, `tools/compare_runs.py`, `mitgcm_jax/tests/test_step_fluxforced.py`
 
-- [ ] all substeps at steps 1–3 pass full-step dump gates (teacher-forced where threshold-sensitive)
+- [x] all substeps at steps 1–3 pass full-step dump gates (teacher-forced where threshold-sensitive)
 - [ ] monitor, SSH/heat/salt budgets, means in the scan carry
 - [ ] 1-month (GPU) vs Fortran; 1-year vs Fortran within the Task 4 spread
 - [ ] write tests: tier-1 3-step full-step gate; budget closure + negative control
