@@ -178,3 +178,20 @@ Production runs may use XLA defaults (ulp-level differences only).
   synthetic case with constancy/conservation (with fills 7e-16 / 1e-18, without 3e-3 / 1e-8).
 - Under z* GAD_ADVECTION reads UPDATE_R_STAR's hFacW/S, recip_hFacC (not recip_hFacNew). Every shared face flux was
   checked bitwise equal on both sides of every tile/facet edge (signed vector exchange of fluxes).
+
+## Task 15 — free surface, r*, cg2d (2026-09-23, sub-agent)
+- CG reproduces the Fortran bitwise, iteration count included (SMOKE 179/172, FORCED 164/161/158), with: sequential
+  per-tile partial sums, fixed tile order, no FMA, traced parameters. cg2dNorm as a constant let XLA regroup
+  `(b*cg2dNorm)*rhsNorm` (iterate drift 1e-9, same count). A numpy CG with sequential sums located the rewrite.
+- Residual margin at stop is only 0.8 % in the tightest step (9.92e-8 vs 1e-7): iteration counts are fragile.
+- Sum order is literal (`sum_order="fortran"`, 0.146 s/solve CPU) — a tree sum ("tile", 0.110 s) gives the same counts
+  and x within 4e-9 but is a floating-point-order deviation: Nikolay's call for production/GPU.
+- CALC_R_STAR's STOP (r* < hFacInf) cannot fire inside jit: counters returned, the driver must check them.
+- Forward-mode AD of cg2d reuses the forward solve (Fortran tolerance, warm start); reverse mode is exact.
+- A pre-exchange (C02) gate pins the solver's halo semantics; keeping the unknown interior-only makes the adjoint exact.
+
+## Task 19 (first) — integrated step (2026-09-23)
+- The composed FORWARD_STEP (forward_step.py, model.py: parameters from namelists, grid from files) is BITWISE equal
+  to the Fortran at every dumped stage of step 1 and at the start of iterations 2 and 3 (free run), cg2d iteration
+  counts included, under the gate flags. ~4 s per step on 32 CPU cores after compilation (compile ~12 s).
+- tools/step_vs_dump.py = first-divergence harness (stage by stage vs dumps).
