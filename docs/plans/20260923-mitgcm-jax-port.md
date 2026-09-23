@@ -392,8 +392,40 @@ review).** Oracle: ➕ `full_jaxdump_v5` (M2.0 done 2026-09-23: 40 new full-tree
 - Long-window adjoints: disk checkpoint level (custom_vjp + io_callback), host offload measured on GPU; measured
   comparison with TAF (memory, cost, code needed). GPU scatter-add non-determinism in gather-map backward: edge-strip
   lowering if repeats prove insufficient.
-- `exact` sea-ice adjoint via `custom_root`; `xx_*` controls with WC01 via `jax.linear_transpose`; ECCO cost terms.
+- `exact` sea-ice adjoint via `custom_root` (➕ 2026-09-23: the LSR already has an implicit-derivative custom_jvp,
+  M2.4; sea-ice levels ecco/no_dynamics/full, M2.6b-1). ~~`xx_*` controls with WC01 via `jax.linear_transpose`; ECCO
+  cost terms~~ ➕ moved to M4.
 - JAX upgrade via canary (tier 1 + gradient gates + short GPU run old vs new).
+
+### ➕ M4 — State-estimation demo, 1-2 years (added 2026-09-23 at Nikolay's request; starts after M2 acceptance)
+Goal: repeat the ECCO v4r4 assimilation (4D-Var with the adjoint, L-BFGS) with the JAX model for a 1-2 year window,
+first as a twin experiment with a known answer, then with the real V4r4 observations. Every step gated against the
+Fortran (cost terms, control maps) or against a known answer (twin), as in M1/M2. Cost estimate (2026-09-23
+measurements, not end-to-end): full model ~1.5 h per model year forward on one GH200 (ocean 0.10 s/step + Pallas sea
+ice 0.4-0.8 s/step), gradient ~5 forwards (ecco mode: sea-ice adjoint skipped, its forward recomputed) -> ~8 h per
+L-BFGS iteration for a 1-year window, 20-40 iterations = 1-2 GPU-weeks per window (several windows / experiments in
+parallel on the 4 GPUs of a node).
+- M4.0 Oracle + data: Fortran full tree with the production useECCO=T / useProfiles=T and the V4r4 data_constraints
+  (builds on the 2026-09-23 useECCO-neutrality check): per-term cost values (gencost, profiles) and the control
+  vectors for 1 year at the V4r4 solution; inventory + download of the observation/weight files (shared-partition
+  jobs, resumable; size decides the scope: which data types first).
+- M4.1 Cost function: port pkg/ecco gencost (altimetry: along-track SLA + MDT; SST; sea-ice concentration; SSS and
+  GRACE bottom pressure only if the window has them) and pkg/profiles (CTD/XBT/Argo interpolation in space and time),
+  with their averaging operators, weights/uncertainties and smoothing; gate: every J term equal to the Fortran's at
+  the V4r4 solution (bitwise where the arithmetic allows, else to the round-off floor).
+- M4.2 Controls: time-variable atmospheric controls (gentim2d, 14-day records per V4r4 data.ctrl: atemp, aqh,
+  precip, swdown, lwdown, wind/stress), the WC01 smoothing preconditioner and its transpose (jax.linear_transpose),
+  bounds; initial-state and mixing controls (done, Task 8b). Gate vs the Fortran xx_*.effective and CTRL_MAP_FORCING.
+- M4.3 Gradient over the window: full model, ecco mode (default) — FD plateaus, TL/adjoint, repeats, amplification
+  screen (Task 21 recipe) at 1 year, using the exact-mode horizon study (2026-09-23) to choose the freezes.
+- M4.4 Optimizer: L-BFGS in the preconditioned control space (port of m1qn3 as ECCO uses it, or an equivalent with a
+  documented difference); gates on a small quadratic and on a reproducibility check.
+- M4.5 Twin experiment: perturb controls, generate synthetic observations from the unperturbed run, recover the
+  controls over 1 year (known answer: J -> noise floor, controls converge in the observed directions).
+- M4.6 Real data, 1-2 years: window choice for Nikolay — 1992-1993 (continues from the V4r4 pickups we already run
+  from; sparse in-situ data) or an Argo-era window (better profiles; needs the model state at its start: a JAX/Fortran
+  forward run of V4r4 up to that date). Acceptance: J(iteration 0) = Fortran's per term, J decreasing per term like
+  ECCO's own iterations, and the measured cost per iteration (GPU hours) vs ECCO's CPU cost.
 
 ### Task 22: Verify acceptance criteria (after M2)
 - [ ] 1-yr full V4r4 within Fortran run-to-run spread; sharded multi-week gradient validated per Task 21 criteria in both modes
