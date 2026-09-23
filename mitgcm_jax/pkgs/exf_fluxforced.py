@@ -495,8 +495,10 @@ class ExfParams:
             raise NotImplementedError("useCAL=F: only the calendar branch of EXF_GetFFieldRec is ported "
                                       "(exf_getffieldrec.F:94)")
         if get("data.pkg", "packages", "useCTRL", default=False):
-            raise NotImplementedError("useCTRL=T: xx_gentim2d forcing controls (exf_getffields.F:681, "
-                                      "exf_getsurfacefluxes.F:106, CTRL_MAP_FORCING) are not ported")
+            # useCTRL=T: the xx_gentim2d adds of ff exf_getffields.F:681-760 and exf_getsurfacefluxes.F:106-161 are
+            # x + 0 when every forcing-control record is zero (pkgs/ctrl.py; hard error otherwise)
+            from mitgcm_jax.pkgs import ctrl as ctrl_mod
+            ctrl_mod.require_zero_forcing_controls(nml)
         if get("data.pkg", "packages", "useSEAICE", default=False):
             raise NotImplementedError("useSEAICE=T changes the EXF masks (ff/exf_init_fixed.F:86-115)")
         # ff/exf_readparms.F:328 ALLOW_ATM_WIND => useAtmWind default .TRUE.

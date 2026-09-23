@@ -10,7 +10,8 @@ intermediates keyed by dump stage, for the first-divergence harness and diagnost
 
 Order (forward_step.F, flux-forced tree):
   :418-450  RESET_NLFS_VARS, UPDATE_R_STAR(.FALSE.)                 (every step: ALLOW_AUTODIFF)
-  :495      LOAD_FIELDS_DRIVER -> EXF_GETFORCING                     (CTRL_MAP_FORCING: useCTRL=F in the oracles)
+  :495      LOAD_FIELDS_DRIVER -> EXF_GETFORCING
+  :528      CTRL_MAP_FORCING (useCTRL=T: zero forcing controls + FFIELDS exchanges)
   :609      DO_OCEANIC_PHYS  (EXTERNAL_FORCING_SURF, rho/sigma/IVDC/mxlayer, salt plume depth, GGL90, GM/Redi)
   :808      DYNAMICS
   :823      myIter <- myIter+1
@@ -39,6 +40,7 @@ from mitgcm_jax.core import solve_for_pressure as sfp
 from mitgcm_jax.core import thermodynamics as th_mod
 from mitgcm_jax.core import tracers_correction as tc
 from mitgcm_jax.core.cg2d import Cg2dParams
+from mitgcm_jax.pkgs import ctrl as ctrl_mod
 from mitgcm_jax.pkgs import exf_fluxforced as exf_mod
 from mitgcm_jax.pkgs import gad as gad_mod
 from mitgcm_jax.pkgs import ggl90 as ggl_mod
@@ -68,6 +70,7 @@ class ModelParams(NamedTuple):
     gadS: gad_mod.GADParams
     th: th_mod.ThermoParams
     tc: object
+    ctrl: object = None       # pkgs/ctrl.CtrlConfig when useCTRL=T (static pytree), else None
 
 
 def do_oceanic_phys(P, g, ex, f, kLowC, adj=EXACT):
@@ -146,6 +149,9 @@ def forward_step(P, g, ex, kLowC, st: State, exf_in, adj=EXACT):
     exf = {k: f[k] for k in EXF_STATE}
     ff = {k: f[k] for k in FF_FIELDS}
     exf, ff = exf_mod.exf_getforcing(P.exf, g, ex, exf, ff, exf_in["bufs"], exf_in["facs"], exf_in["myTime"])
+    # :524-530 CTRL_MAP_FORCING (useCTRL=T): zero xx_gentim2d adds + the FFIELDS exchanges (pkgs/ctrl.py)
+    if P.ctrl is not None:
+        ff = ctrl_mod.ctrl_map_forcing(P.ctrl, g, ex, ff)
     f.update(exf)
     f.update({k: ff[k] for k in FF_FIELDS if k in ff})
     aux["S02_load_fields"] = dict(exf, **ff)

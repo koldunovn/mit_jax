@@ -33,7 +33,9 @@ pkg/<pkg> unless marked ff = ECCOv4 Release 4/flux-forced/code):
   :219  PACKAGES_INIT_VARIABLES  GGL90_INIT_VARIA ggl90_init_varia.F:48-67 + GGL90_READ_PICKUP
                            ggl90_read_pickup.F:61-66; GMREDI_INIT_VARIA gmredi_init_varia.F:44-66; ff EXF_INIT_VARIA
                            (pkgs/exf_fluxforced.exf_init_varia); SALT_PLUME_INIT_VARIA salt_plume_init_varia.F:45-52;
-                           GAD_INIT_VARIA empty (GAD_ALLOW_TS_SOM_ADV undefined); SMOOTH_INIT_VARIA empty
+                           GAD_INIT_VARIA empty (GAD_ALLOW_TS_SOM_ADV undefined); SMOOTH_INIT_VARIA empty;
+                           useCTRL: CTRL_INIT_VARIABLES (packages_init_variables.F:496-503) -> ff CTRL_MAP_INI_GENARR
+                           on etaN, theta, salt, uVel, vVel (pkgs/ctrl.py; kapGM/kapRedi/diffKr: model.setup)
   :236-251 CONVECTIVE_ADJUSTMENT_INI  compiled out (ALLOW_AUTODIFF_WHTAPEIO defined, AUTODIFF_OPTIONS.h:49)
   :259  CALC_R_STAR(etaH, myIter=-1)   core/free_surface.calc_r_star
   :264  UPDATE_R_STAR(.TRUE.)          core/free_surface.update_r_star, with recip_hFac* of INI_MASKS_ETC
@@ -47,18 +49,17 @@ pkg/<pkg> unless marked ff = ECCOv4 Release 4/flux-forced/code):
 the_main_loop.F:363-406 AUTODIFF_STORE / AUTODIFF_RESTORE (ff): identity (every stored array is restored, checked
                                       by parsing both files; AUTODIFF_USE_OLDSTORE_2D/3D skip the DYNVARS copies)
 
-Not ported (hard error at set-up): useCTRL=T (CTRL_INIT_VARIABLES -> ff CTRL_MAP_INI_GENARR adds the smoothed,
-weighted xx_*.<optimcycle> adjustments to theta, salt, uVel, vVel, etaN, kapGM, kapRedi, diffKr: see the module
-note CTRL below), useECCO, useProfiles, useSEAICE, nIter0 = 0 / pickupSuff / old-format pickups, tracer AB histories.
+Not ported (hard error at set-up): useECCO, useProfiles, useSEAICE, nIter0 = 0 / pickupSuff / old-format pickups,
+tracer AB histories; ctrl branches other than ctrlUseGen=T generic controls with WC01 smoothing (pkgs/ctrl.py).
 
-CTRL (useCTRL=T with every mult_* = 0, as in production data.ctrl): mult_genarr2d/3d and mult_gentim2d weight only the
-cost terms (ctrl_cost_gen.F); ff ctrl_map_ini_genarr.F:83-152 does not read them. With ctrlUseGen=T it applies every
-genarr control whose weight file is set: fld = fld + smooth_correl3d(xx)/sqrt(weight) on wet points
-(:411-466, WC01 = 300-step correlation smoother, pkg/smooth), then CTRL_BOUND_3D (:470-476) and EXCH (:481-484),
-for xx_theta, xx_salt, xx_kapgm, xx_kapredi, xx_diffkr, xx_uvel/xx_vvel (EXCH_UV_XYZ_RL) and xx_etan (2-D, etaN only:
-etaH is not adjusted, :85). The production xx_*.0000000129 initial-condition and parameter controls are non-zero, so
-useCTRL=T changes the initial state; it runs in PACKAGES_INIT_VARIABLES, i.e. after CALC_PHI_RLOW_INI and before the
-r* / INTEGR_CONTINUITY sequence.
+CTRL (useCTRL=T with every mult_* = 0, as in production data.ctrl; plan Task 8b): mult_genarr2d/3d and mult_gentim2d
+weight only the cost terms (ctrl_cost_gen.F); ff ctrl_map_ini_genarr.F:83-152 does not read them. With ctrlUseGen=T
+it applies every genarr control whose weight file is set: fld = fld + smooth_correl3d(xx)/sqrt(weight) on wet points
+(WC01 = 150 pseudo-time steps of pkg/smooth), CTRL_BOUND, EXCH, for xx_etan (2-D, etaN only: etaH is not adjusted),
+xx_theta, xx_salt, xx_uvel/xx_vvel (here) and xx_kapgm, xx_kapredi, xx_diffkr (grid fields: model.setup). It runs
+in PACKAGES_INIT_VARIABLES, i.e. after CALC_PHI_RLOW_INI (totPhiHyd/phiHydLow keep the pickup theta/salt) and before
+the r* / INTEGR_CONTINUITY sequence (which sees the adjusted uVel, vVel; etaH = the adjusted etaN after UPDATE_ETAH).
+Gate: tests/test_ctrl.py (oracle ref_ff_jaxdump_v4).
 """
 
 from dataclasses import dataclass
@@ -76,6 +77,7 @@ from mitgcm_jax.core.implicit import vertical_factors as grav_factors
 from mitgcm_jax.io.llc import compact_to_tiles
 from mitgcm_jax.io.mds import read_mds
 from mitgcm_jax.params_io import RunNamelists
+from mitgcm_jax.pkgs import ctrl as ctrl_mod
 from mitgcm_jax.pkgs import exf_fluxforced as exf_mod
 from mitgcm_jax.state import G00_STATE_FIELDS, S00_FIELDS, State
 
@@ -104,6 +106,7 @@ class InitConfig:
     useGGL90: bool
     useGMRedi: bool
     useSALT_PLUME: bool
+    useCTRL: bool = False    # packages_boot.F; CTRL_INIT_VARIABLES (packages_init_variables.F:496-503)
 
     @classmethod
     def from_namelists(cls, nml):
@@ -136,8 +139,6 @@ class InitConfig:
              "tauTheta/SaltClimRelax > 0 (ini_forcing.F:47-60, lambda*ClimRelax not carried)"),
             (int(p1("tempAdvScheme", 2)) not in AB_TRACER_SCHEMES and int(p1("saltAdvScheme", 2)) not in
              AB_TRACER_SCHEMES, "Adams-Bashforth on T/S (gad_init_fixed.F:147-165: GtNm/GsNm pickup records)"),
-            (not pkg("useCTRL"), "useCTRL=T: CTRL_INIT_VARIABLES -> CTRL_MAP_INI_GENARR (ff ctrl_map_ini_genarr.F; "
-             "adds the smoothed xx_* adjustments to theta/salt/uVel/vVel/etaN/kapGM/kapRedi/diffKr) is not ported"),
             (not pkg("useECCO"), "useECCO=T: ECCO_INIT_VARIA (ff ecco_init_varia.F) is not ported"),
             (not pkg("useProfiles"), "useProfiles=T: PROFILES_INIT_VARIA is not ported"),
             (not pkg("useSEAICE"), "useSEAICE=T: SEAICE_INIT_VARIA is not ported"),
@@ -159,7 +160,7 @@ class InitConfig:
                    readGuNm2=momStepping and beta_AB != 0.0,
                    m1=1 + (nIter0 + 1) % 2, m2=1 + nIter0 % 2,
                    useEXF=pkg("useEXF"), useGGL90=pkg("useGGL90"), useGMRedi=pkg("useGMRedi"),
-                   useSALT_PLUME=pkg("useSALT_PLUME"))
+                   useSALT_PLUME=pkg("useSALT_PLUME"), useCTRL=pkg("useCTRL"))
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -452,11 +453,12 @@ def integr_continuity_ini(p, g, ex, uFld, vFld, hFacW, hFacS, etaN, etaH, dEtaHd
     return dict(dEtaHdt=dEtaHdt, PmEpR=PmEpR, etaN=etaN, wVel=wVel, etaHnm1=etaHnm1, etaH=etaH)
 
 
-def initialise_varia(P, g, ex, kLowC, pk, tke, exf):
+def initialise_varia(P, g, ex, kLowC, pk, tke, exf, ctrl_in=None):
     """INITIALISE_VARIA (ff initialise_varia.F:123-298) for a pickup start. pk: interior arrays of READ_PICKUP
     (read_pickup); tke: interior of pickup_ggl90, None when useGGL90=F (GGL90_INIT_VARIA not called); exf: the
-    EXF_FIELDS arrays of EXF_INIT_VARIA ({} when useEXF=F). Returns (fields, aux): fields = the State dict,
-    aux = PmEpR, INI_CG2D's myNorm and the calc_r_star.F:182-202 counters of both CALC_R_STAR calls."""
+    EXF_FIELDS arrays of EXF_INIT_VARIA ({} when useEXF=F); ctrl_in: pkgs/ctrl.CtrlInit of the state controls
+    (None when useCTRL=F). Returns (fields, aux): fields = the State dict, aux = PmEpR, INI_CG2D's myNorm and the
+    calc_r_star.F:182-202 counters of both CALC_R_STAR calls."""
     L = g.layout
     J, I = L.js(1, L.sNy), L.is_(1, L.sNx)
     z2, z3 = jnp.zeros_like(g.rA), jnp.zeros_like(g.h0FacC)
@@ -523,6 +525,10 @@ def initialise_varia(P, g, ex, kLowC, pk, tke, exf):
         f[n] = exf[n]
     # SALT_PLUME_INIT_VARIA (salt_plume_init_varia.F:45-52; SALT_PLUME_VOLUME undefined)
     f.update(saltPlumeDepth=z2, saltPlumeFlux=z2)
+    # CTRL_INIT_VARIABLES (packages_init_variables.F:496-503, useCTRL) -> ff CTRL_MAP_INI_GENARR
+    # (ctrl_init_variables.F:393-397) on the DYNVARS controls; kapGM/kapRedi/diffKr are adjusted in model.setup
+    if ctrl_in is not None:
+        f.update(ctrl_mod.ctrl_map_ini_genarr(ctrl_in, g, ex, {k: f[k] for k in ctrl_mod.STATE_TARGETS}))
     # --- r* sequence (NONLIN_FRSURF, select_rStar > 0, nonlinFreeSurf > 2) ----------------------------------------
     rs1 = fs.calc_r_star(P.fs, g, ex, f["etaH"], rStarFacC, rStarFacW, rStarFacS)   # :259 CALC_R_STAR(etaH, -1)
     cnt1 = {k: rs1.pop(k) for k in ("icntc1", "icntw", "icnts", "icntc2", "maxhFacC")}
@@ -550,10 +556,11 @@ _JIT = {}
 
 
 def initialise_varia_jit(ex):
-    """jax.jit(initialise_varia) for this exchanger (cached): call as f(P, g, kLowC, pk, tke, exf) with the
-    parameters as arguments (traced floats: KERNEL_GUIDE, params_pytree)."""
+    """jax.jit(initialise_varia) for this exchanger (cached): call as f(P, g, kLowC, pk, tke, exf[, ctrl_in]) with
+    the parameters as arguments (traced floats: KERNEL_GUIDE, params_pytree)."""
     if id(ex) not in _JIT:
-        _JIT[id(ex)] = (ex, jax.jit(lambda P, g, kLowC, pk, tke, exf: initialise_varia(P, g, ex, kLowC, pk, tke, exf)))
+        _JIT[id(ex)] = (ex, jax.jit(lambda P, g, kLowC, pk, tke, exf, ctrl_in=None:
+                                    initialise_varia(P, g, ex, kLowC, pk, tke, exf, ctrl_in)))
     return _JIT[id(ex)][1]
 
 
@@ -582,7 +589,10 @@ def state_from_pickup(P, g, ex, kLowC, rundir, return_aux=False):
                          f"the pickup gives mom_StartAB={info.mom_StartAB} (check_pickup.F:60-180), nIter0="
                          f"{cfg.nIter0}: build DynamicsParams.from_namelists(nml, mom_StartAB=...)")
     pk = {k: jnp.asarray(v) for k, v in pk.items()}
-    f, aux = initialise_varia_jit(ex)(P, g, kLowC, pk, None if tke is None else jnp.asarray(tke), exf)
+    ctrl_in = None
+    if cfg.useCTRL:        # CTRL_INIT_VARIABLES inputs (xx, weights, pkg/smooth operators; recip_hFacC of INI_MASKS_ETC)
+        ctrl_in = ctrl_mod.ctrl_init(nml, g, ex, ctrl_mod.STATE_TARGETS, ini_recip_hfac(g.h0FacC))
+    f, aux = initialise_varia_jit(ex)(P, g, kLowC, pk, None if tke is None else jnp.asarray(tke), exf, ctrl_in)
     for c in aux["rstar_checks"]:                                             # calc_r_star.F:148-190 STOP
         if int(c["icntc1"]) + int(c["icntw"]) + int(c["icnts"]) > 0:
             raise ValueError("CALC_R_STAR: too SMALL rStarFac[C,W,S] (calc_r_star.F:187-189 STOP)")
