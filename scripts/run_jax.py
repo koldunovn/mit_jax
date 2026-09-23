@@ -11,7 +11,8 @@ Initial state: --init-oracle pickup = built from the run directory's pickup like
   monitor.txt            %MON dynstat lines in the Fortran format (compare with STDOUT.0000)
   snap_<iter>.npz        theta, salt, etaN (compact, float32) every --snapshot-every steps (dumpFreq twin)
   state_final.npz        the full State (restart)
-Model date of iteration n: startDate_1 (data.cal) + n*deltaT - startTime ... taken from the calendar of EXF.
+Outputs are due at absolute iterations (it % every == 0), like Fortran's mod(myTime, freq) == 0 with deltaT = 3600 s
+and startTime = nIter0*deltaT, so e.g. --monitor-every 24 matches a Fortran monitorFreq = 86400 run.
 """
 
 import argparse
@@ -144,7 +145,7 @@ def main(argv=None):
         jax.block_until_ready(st.f["theta"])
         tstep.append(time.time() - t1)
         t_state = exf_mod.model_time(nml, it + 1 - nIter0 + 1)[0]
-        if (n + 1) % a.monitor_every == 0:
+        if (it + 1) % a.monitor_every == 0:
             stats = monitor(st)
             mon.write(format_dynstat(stats, it + 1) + "\n")
             mon.flush()
@@ -155,15 +156,15 @@ def main(argv=None):
             if not np.isfinite(th["mean"]):
                 say("NaN: stopping")
                 break
-        if (n + 1) % a.frame_every == 0:
+        if (it + 1) % a.frame_every == 0:
             frame(nframe, st, t_state)
             nframe += 1
-        if (n + 1) % a.snapshot_every == 0:
+        if (it + 1) % a.snapshot_every == 0:
             np.savez(out / f"snap_{it + 1:010d}.npz",
                      theta=tiles_to_compact(interior(st.theta, L)).astype(np.float32),
                      salt=tiles_to_compact(interior(st.salt, L)).astype(np.float32),
                      etaN=tiles_to_compact(interior(st.etaN, L)).astype(np.float32))
-        if a.checkpoint_every and (n + 1) % a.checkpoint_every == 0:
+        if a.checkpoint_every and (it + 1) % a.checkpoint_every == 0:
             np.savez(out / f"state_{it + 1:010d}.npz", it=int(st.it), **{k: np.asarray(v) for k, v in st.f.items()})
     np.savez(out / "state_final.npz", it=int(st.it), **{k: np.asarray(v) for k, v in st.f.items()})
     ts = np.array(tstep[2:]) if len(tstep) > 2 else np.array(tstep)
