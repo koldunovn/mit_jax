@@ -101,6 +101,16 @@ def needs(rundir):
         else:
             add(Need(v[0], f"data:parm05:{k}", "model/src/ini_* (always read when set)"))
 
+    # --- curvilinear grid: model/src/ini_curvilinear_grid.F:275-281 reads 'tile'//I3.3(face)//'.mitgrid' per facet
+    #     (exch2 face number) when horizGridFile is blank; facet count from data.exch2 dimsFacets
+    if _get(data, "parm04", "usingcurvilineargrid", False):
+        hgf = _get(data, "parm05", "horizgridfile", "")
+        dims = _nml(rundir, "data.exch2").get("w2_exch2_parm01", {})
+        dims = next((v for k, v in dims.items() if k.startswith("dimsfacets")), [])
+        for face in range(1, len(dims) // 2 + 1):
+            name = f"tile{face:03d}.mitgrid" if not _nonblank(hgf) else f"{hgf}.face{face:03d}.bin"
+            add(Need(name, "data.exch2:dimsfacets", "model/src/ini_curvilinear_grid.F:275-281"))
+
     # --- pickups (model/src/ini_fields.F:41 READ_PICKUP; pkg read_pickup routines), nIter0 > 0
     if n0 > 0:
         suf = f"{n0:010d}"

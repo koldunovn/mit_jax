@@ -91,7 +91,7 @@ def _mini_rundir(tmp_path, ntimesteps):
     run = tmp_path / "run"
     run.mkdir()
     for f in ("data", "data.pkg", "data.cal", "data.exf", "data.gmredi", "data.ctrl", "data.optim", "data.smooth",
-              "data.ecco", "eedata"):
+              "data.ecco", "data.exch2", "eedata"):
         shutil.copy(V4R4 / "flux-forced" / "namelist" / f, run / f)
     text = (run / "data").read_text().replace("nTimeSteps=227903", f"nTimeSteps={ntimesteps}")
     assert text != (run / "data").read_text() or ntimesteps == 227903
@@ -106,6 +106,7 @@ def test_audit_years_and_negative_control(tmp_path):
     assert "TFLUX_6hourlyavg_1992" in names and "TFLUX_6hourlyavg_1993" not in names
     assert "pickup.0000000001.data" in names and "xx_qnet.0000000129.data" in names
     assert "smooth3DscalesH001" in names and unresolved == []
+    assert {f"tile00{i}.mitgrid" for i in range(1, 6)} <= names
     # year boundary: a run ending after the last 1992 record (Dec 31 21:00) needs the 1993 file
     s, e = air.run_window({"parm03": {"niter0": [1], "ntimesteps": [8784], "deltatclock": [3600.0]}},
                           {"cal_nml": {"startdate_1": [19920101], "startdate_2": [120000]}})
