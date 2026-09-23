@@ -11,6 +11,10 @@ Initial state: --init-oracle pickup = built from the run directory's pickup like
   monitor.txt            %MON dynstat lines in the Fortran format (compare with STDOUT.0000)
   snap_<iter>.npz        theta, salt, etaN (compact, float32) every --snapshot-every steps (dumpFreq twin)
   state_final.npz        the full State (restart)
+  means_<iter>.npz       with --means-every N: time means of theta, salt, etaN, uVel, vVel, sst (compact, float32)
+                         over the steps since the previous mean (accumulated every step; it_first, it_last, nsteps)
+  budgets.txt            with --budgets: per-step global volume/SSH/heat/salt budgets (%BUDGET lines,
+                         mitgcm_jax/diagnostics/budgets.py) and their cumulative residuals at the end
 Outputs are due at absolute iterations (it % every == 0), like Fortran's mod(myTime, freq) == 0 with deltaT = 3600 s
 and startTime = nIter0*deltaT, so e.g. --monitor-every 24 matches a Fortran monitorFreq = 86400 run.
 """
@@ -28,6 +32,8 @@ import jax  # noqa: E402
 
 import mitgcm_jax  # noqa: E402,F401
 from mitgcm_jax.core.forward_step import forward_step  # noqa: E402
+from mitgcm_jax.diagnostics import budgets as budgets_mod  # noqa: E402
+from mitgcm_jax.diagnostics import means as means_mod  # noqa: E402
 from mitgcm_jax.diagnostics.monitor import dynstat, dynstat_device, format_dynstat  # noqa: E402
 from mitgcm_jax.io.llc import tiles_to_compact  # noqa: E402
 from mitgcm_jax.model import setup  # noqa: E402
@@ -39,6 +45,12 @@ from mitgcm_jax.tests import oracle  # noqa: E402
 
 def interior(a, L):
     return np.asarray(a)[..., L.OLy:L.OLy + L.sNy, L.OLx:L.OLx + L.sNx]
+
+
+def compact(a, L):
+    """Interior of a [tile, (k,) j, i] field as the MITgcm compact global array ((k,) 1170, 90): tiles_to_compact wants
+    the tile axis at -3."""
+    return tiles_to_compact(np.moveaxis(interior(a, L), 0, -3))
 
 
 def model_date(nml, myTime):
@@ -68,6 +80,11 @@ def main(argv=None):
     ap.add_argument("--checkpoint-every", type=int, default=0, help="also write state_<iter>.npz every N steps")
     ap.add_argument("--cg2d-unroll", type=int, default=1,
                     help="Cg2dParams.sum_unroll: unroll the Fortran-order tile sums (bitwise identical; 5 on GPU)")
+    ap.add_argument("--means-every", type=int, default=0,
+                    help="write means_<iter>.npz: time means accumulated every step, every N steps (0: off)")
+    ap.add_argument("--means-fields", default=",".join(means_mod.MEAN_FIELDS),
+                    help="comma-separated fields for --means-every (State fields, or sst)")
+    ap.add_argument("--budgets", action="store_true", help="per-step global budgets to budgets.txt")
     a = ap.parse_args(argv)
     out = Path(a.outdir)
     out.mkdir(parents=True, exist_ok=False)
@@ -119,6 +136,15 @@ def main(argv=None):
             return dynstat(st, g, L)
         return jax.tree_util.tree_map(float, mon_dev(st, g))
     mon = open(out / "monitor.txt", "w")
+    if a.means_every:
+        mean_fields = tuple(f for f in a.means_fields.split(",") if f)
+        means_acc = jax.jit(means_mod.means_accumulate)
+        macc, m_first = means_mod.means_init(st, mean_fields), a.init_it + 1
+    if a.budgets:
+        budgets_mod.check_config(P)
+        bud = jax.jit(budgets_mod.step_budget)
+        bacc = budgets_mod.budget_acc_init()
+        budf = open(out / "budgets.txt", "w")
 
     def frame(n, st, myTime):
         it = int(st.it)
@@ -141,9 +167,24 @@ def main(argv=None):
         myTime, myIter = exf_mod.model_time(nml, it - nIter0 + 1)
         bufs, facs, _ = loader.load(myTime, myIter)
         t1 = time.time()
+        st_prev = st
         st = step(P, g, kLowC, st, {"bufs": bufs, "facs": facs, "myTime": myTime})
         jax.block_until_ready(st.f["theta"])
         tstep.append(time.time() - t1)
+        if a.budgets:
+            b = bud(P, g, kLowC, st_prev, st)
+            bacc = budgets_mod.budget_acc_add(bacc, b)
+            budf.write(budgets_mod.format_budget(b, it + 1) + "\n")
+            budf.flush()
+        del st_prev
+        if a.means_every:
+            macc = means_acc(macc, st, 1.0)
+            if (it + 1) % a.means_every == 0:
+                m = means_mod.means_finish(macc)
+                np.savez(out / f"means_{it + 1:010d}.npz", it_first=m_first, it_last=it + 1,
+                         nsteps=int(float(macc["w"])),
+                         **{k: compact(v, L).astype(np.float32) for k, v in m.items()})
+                macc, m_first = means_mod.means_init(st, mean_fields), it + 2
         t_state = exf_mod.model_time(nml, it + 1 - nIter0 + 1)[0]
         if (it + 1) % a.monitor_every == 0:
             stats = monitor(st)
@@ -161,12 +202,15 @@ def main(argv=None):
             nframe += 1
         if (it + 1) % a.snapshot_every == 0:
             np.savez(out / f"snap_{it + 1:010d}.npz",
-                     theta=tiles_to_compact(interior(st.theta, L)).astype(np.float32),
-                     salt=tiles_to_compact(interior(st.salt, L)).astype(np.float32),
-                     etaN=tiles_to_compact(interior(st.etaN, L)).astype(np.float32))
+                     theta=compact(st.theta, L).astype(np.float32),       # (Nr, 1170, 90)
+                     salt=compact(st.salt, L).astype(np.float32),
+                     etaN=compact(st.etaN, L).astype(np.float32))
         if a.checkpoint_every and (it + 1) % a.checkpoint_every == 0:
             np.savez(out / f"state_{it + 1:010d}.npz", it=int(st.it), **{k: np.asarray(v) for k, v in st.f.items()})
     np.savez(out / "state_final.npz", it=int(st.it), **{k: np.asarray(v) for k, v in st.f.items()})
+    if a.budgets:
+        budf.write("%BUDGET cumulative " + " ".join(f"{k}={float(v): .6e}" for k, v in bacc.items()) + "\n")
+        budf.close()
     ts = np.array(tstep[2:]) if len(tstep) > 2 else np.array(tstep)
     say(f"done: {len(tstep)} steps, median step {np.median(ts):.2f} s, total {time.time() - t0:.0f} s, "
         f"{nframe} frames")
