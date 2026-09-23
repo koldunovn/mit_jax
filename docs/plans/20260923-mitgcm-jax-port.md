@@ -128,7 +128,7 @@
 - [x] fetch PO.DAAC native-grid 1992-01-02T00 snapshot (11 steps) and 1992 monthly means
 - [x] `audit_run_inputs.py`: parse every `data*` of a run directory, assert each referenced file exists, record sha256 (keep own copies)
 - [x] write tests: manifest checksums; shapes (compact 90×1170, big-endian float32); audit fails on a missing planted file
-- [ ] run tests — must pass before Task 4
+- [x] run tests — must pass before Task 4 — test_data_manifest.py (tier1x) passes
 
 ### Task 4: Fortran reference builds and baseline runs
 **Files:**
@@ -223,7 +223,7 @@ compare outputs), so no task waits for a later package; full-step gates start in
 
 - [x] gate first: rhoInSitu, sigmaX/Y/R, IVDC diffusivity/count, mixed-layer depth
 - [x] port `find_rho.F` JMD95Z (`selectP_inEOS_Zc=0`), `grad_sigma.F`, `calc_ivdc.F`, `calc_oce_mxlayer.F`
-- [ ] ecco seam at `grad_sigma` output: stop_gradient on sigmaX/Y/R (mirrors `ZERO_ADJ_LOC`, `do_oceanic_phys.F:895–900`)
+- [x] ecco seam at `grad_sigma` output: stop_gradient on sigmaX/Y/R (mirrors `ZERO_ADJ_LOC`, `do_oceanic_phys.F:895–900`) — Task 17 (AdjointConfig.gm_sigma)
 - [x] write tests: replay gates P=1/P=4; drho/dT,dS vs FD; ecco-forward == exact-forward bytes; effect test (ecco gradient differs on a fixture with active IVDC/GM)
 - [x] run tests — must pass before Task 11
 
@@ -232,7 +232,7 @@ compare outputs), so no task waits for a later package; full-step gates start in
 - Create: `mitgcm_jax/pkgs/salt_plume.py`, `mitgcm_jax/tests/test_salt_plume.py`
 
 - [x] gate first: plume depth, tendency (via `APPLY_FORCING_S`, `SALT_PLUME_VOLUME` undefined), flux-forced path per `do_oceanic_phys.F:294,580`
-- [ ] ecco mode per Task 18 semantics
+- [x] ecco mode per Task 18 semantics — Task 17: ff keeps salt plume in the adjoint; 'off' switch available
 - [x] write tests: replay gates; salt conservation; ecco/exact forward bytes; effect test on a live fixture (plume depth > 0)
 - [x] run tests — must pass before Task 12
 
@@ -242,7 +242,7 @@ compare outputs), so no task waits for a later package; full-step gates start in
 
 - [x] gate first: TKE, mixing length, Kv/Av (smoothed) — replay ~1e-13
 - [x] port `ggl90_calc.F` literally (alpha=30, TKEmin, mxlMaxFlag=2, mxlSurfFlag, ALLOW_GGL90_SMOOTH); add to 3-D background diffKr
-- [ ] backward mode(s) per Task 18 semantics (off-in-reverse and/or frozen coefficients)
+- [x] backward mode(s) per Task 18 semantics (off-in-reverse and/or frozen coefficients) — Task 17: frozen == TAF (STORE placement)
 - [x] write tests: replay; ecco/exact forward bytes; effect test (Kv > background at ≥N points); gradient vs FD away from thresholds
 - [x] run tests — must pass before Task 13
 
