@@ -257,3 +257,19 @@ Production runs may use XLA defaults (ulp-level differences only).
   halo values: an all-zero stage is not automatically an identity.
 - Cost: setup with useCTRL ~160 s + state_from_pickup ~150 s (7 controls x 150 pseudo-steps) — the whole-array gather
   exchange dominates; a halo-only exchange is the main speed-up.
+
+## Task 18 — checkpointing, gradient drivers, reverse cost (2026-09-23, sub-agent)
+- The "44x reverse/forward" was compile time: closed-over P, g, EXF inputs became constants XLA folded (275 s compile;
+  a fresh jit per "second call" recompiled). Warm: CPU 4.1x, A100 1.54x (one step). Time warm calls on one jitted
+  object; pass model data (incl. the Exchanger, now a pytree) as jit arguments (step-VJP compile 64 s -> 26 s).
+- GPU: 82 % of the forward was the literal cg2d's Fortran-order tile sums (scan over 90 rows, ~44k tiny kernels per
+  solve). Unrolling the scan (Cg2dParams.sum_unroll=5) keeps the same additions in the same order (bitwise) and cuts
+  the forward 0.312 -> 0.141 s/step. GPU drivers should set it.
+- custom_linear_solve's JVP runs `solve` on the tangent: with a literal (Fortran-tolerance, warm-started) primal
+  solve the tangent-linear model disagreed with the adjoint (2-step dot test 1.9e-9). cg2d_solve is now a custom_jvp
+  with an explicit implicit-derivative rule dx = A^-1(db - dA x) (tight CG): dot test 1.3e-11 (round-off floor), and
+  the primal x can be named for the remat policy (the literal loop no longer re-runs in the reverse).
+- A100-80, 24-step window, exact mode: step schedule 10.3 s (3.0x fwd, 38.7 GB), sqrt 13.4 s (29 GB), chunked
+  (6-step chunks) 21 s, device flat ~33 GB + 1.9 GB host per boundary. ~0.69 GB per stored step: step schedule fits
+  ~3 days, sqrt ~60 days (extrapolated), chunked any length.
+- GPU gradient repeats differ by up to 4e-11 relative (J bitwise); source not yet found (M3 item).

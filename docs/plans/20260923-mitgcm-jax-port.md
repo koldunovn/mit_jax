@@ -320,10 +320,10 @@ compare outputs), so no task waits for a later package; full-step gates start in
 **Files:**
 - Create: `mitgcm_jax/adjoint/{checkpoint,grad}.py`, `mitgcm_jax/tests/test_checkpoint.py`
 
-- [ ] adapt fesom_jax chunked reverse: remat blocks, per-step State, √N segments, host-parked chunk boundaries, stride, resumable reverse; named halo checkpoint policy
-- [ ] trust protocol utilities: FD h-sweep with noise floor, TL(JVP)/adjoint dot test, per-chunk cotangent-norm trace + amplification statistics
-- [ ] write tests: all schedules give identical gradients (small window, CPU); dot test
-- [ ] run tests — must pass before Task 19
+- [x] adapt fesom_jax chunked reverse: remat blocks, per-step State, √N segments, host-parked chunk boundaries, stride, resumable reverse; named halo checkpoint policy — adjoint/checkpoint.py, grad.py (step/sqrt/chunked, host-parked boundaries); resumable reverse + disk level: M3
+- [x] trust protocol utilities: FD h-sweep with noise floor, TL(JVP)/adjoint dot test, per-chunk cotangent-norm trace + amplification statistics — dot_test, fd_sweep, plateau, amplification, cotangent_norm
+- [x] write tests: all schedules give identical gradients (small window, CPU); dot test — test_checkpoint(_drivers).py; dot test 1.3e-11
+- [x] run tests — must pass before Task 19
 
 ### Task 19: Full flux-forced step — forward runs
 **Files:**
