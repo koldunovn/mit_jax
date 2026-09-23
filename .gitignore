@@ -1,0 +1,9 @@
+MITgcm_c66g/
+ECCO-v4-Configurations/
+ECCOv4/
+verification_other
+verification_other_c66g
+work
+docs/HANDOFF-*.md
+__pycache__/
+*.pyc
