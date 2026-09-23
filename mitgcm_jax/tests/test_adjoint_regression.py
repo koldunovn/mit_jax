@@ -61,7 +61,7 @@ def _run(mode):
     env = dict(os.environ)
     env["XLA_FLAGS"] = ""                    # production GPU flags (see the module docstring)
     r = subprocess.run([sys.executable, str(SCRIPT), "--out", str(out), "--days", "1", "--chunk", "12", "--mode", mode,
-                        "--actions", "grad"], env=env, capture_output=True, text=True)
+                        "--j-scaling", "kelvin", "--actions", "grad"], env=env, capture_output=True, text=True)
     assert r.returncode == 0, r.stdout[-3000:] + r.stderr[-3000:]
     rows = [json.loads(line) for line in (out / "results.jsonl").read_text().splitlines()]
     return [x for x in rows if x["action"] == "grad"][0]

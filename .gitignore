@@ -9,3 +9,4 @@ __pycache__/
 *.pyc
 *.egg-info/
 .pytest_cache/
+docs/DELETION_CANDIDATES.md

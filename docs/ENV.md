@@ -4,7 +4,10 @@ Env `mitgcm-jax` at `/work/ab0995/a270088/mambaforge/envs/mitgcm-jax`, created 2
 fesom-jax known-good set (`constraints.txt` = `pip freeze` of env `fesom-jax`). **A JAX upgrade is a
 deliberate, gated step** (plan M3 canary: tier 1 + gradient gates + a short GPU run, old vs new), never a
 drift — `test_env.py` fails if jax/jaxlib/numpy/scipy differ from `constraints.txt`.
-Reason: newer JAX broke things in fesom_jax (Nikolay, 2026-09-23; details not yet recorded — see below).
+Reason: newer JAX broke things in fesom_jax (Nikolay, 2026-09-23: "some adjoint parts did not work" — exact
+features not remembered). So the upgrade canary MUST include the gradient gates (test_adjoint_modes*,
+test_checkpoint, test_fullfield_grad, the kernel FD gates, the LSR implicit derivative, Pallas vs XLA equivalence)
+and the tier-2 adjoint regression, not only the forward.
 
 ## Create
 

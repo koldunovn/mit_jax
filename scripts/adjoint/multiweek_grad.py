@@ -13,8 +13,12 @@ averaged over the N steps of the window (the gencost 'month' average with the te
 Box m: scripts/prepare_run_adjsen.py, literally: maskC * (XC >= 120) * (YC <= 151) * (YC >= 5) * (YC <= 16), levels
 15..20 (1-based). NOTE: the script's comment says 120E-151E but its condition tests YC <= 151 (always true), so the
 box the adjsen experiment writes is 120E-180E, 5N-16N, levels 15-20 (~150-320 m); it is used as written. The script
-also divides objmask by the box volume and ecco_phys divides again (J_ecco = J / totvol); J here is in K (the
-gradient differs from the literal adjsen one by the constant factor totvol only).
+also divides objmask by the box volume and ecco_phys divides again (J_ecco = J / totvol). Default (Nikolay,
+2026-09-23: "keep, but print a warning"): --j-scaling literal = J as the Fortran computes it, i.e. the K-normalised
+J above divided once more by the box volume (K/m^3), with a WARNING that this double division looks like a bug in
+the ECCO adjsen set-up (docs/ECCO_ISSUES.md); --j-scaling kelvin = J in K (the Task 21 results and the tier-2
+regression values). The two differ by the constant factor 1/volume only. The box edge (YC <= 151) is kept as
+written in the ECCO script too (Nikolay, 2026-09-23), with a NOTE printed.
 
 Controls (theta pytree; zero = the production forward, value-identical):
     theta    [T,Nr,ny,nx] additive theta at the start of iteration 1, interior, then EXCH_XYZ_RL: what xx_theta does in
@@ -184,9 +188,19 @@ class Experiment:
         vol0 = float(np.sum(m * h0 * drF[None, :, None, None] * rA[:, None]))       # eccoVol_0 over the box
         self.box_vol = vol0
         self.W = jnp.asarray(m * drF[None, :, None, None] * rA[:, None] / vol0)
+        if a.j_scaling == "literal":                   # ecco_phys.F divides the (already /volume) objmask again
+            self.W = self.W / vol0
         self.int3 = jnp.asarray(interior_mask(L, True))
         self.int2 = jnp.asarray(interior_mask(L, False))
         log(f"box: {int(m.sum())} wet cells, volume {vol0:.4e} m^3")
+        log("NOTE: box as written in ECCO's prepare_run_adjsen.py: its comment says 120E-151E but the condition tests "
+            "YC <= 151 (always true), so the box is 120E-180E, 5N-16N, levels 15-20 (docs/ECCO_ISSUES.md)")
+        if a.j_scaling == "literal":
+            log(f"WARNING: J follows the Fortran adjsen set-up literally: prepare_run_adjsen.py divides objmask by the "
+                f"box volume and ecco_phys.F divides by it again, so J = box-mean theta / volume ({vol0:.4e} m^3), "
+                f"in K/m^3. We follow the Fortran; this double division is probably a bug in the ECCO set-up "
+                f"(docs/ECCO_ISSUES.md). Gradients differ from the K-normalised J by the constant factor 1/volume "
+                f"only; use --j-scaling kelvin for J in K.")
         gpath = Path(a.out) / "grid.npz"
         if not gpath.exists():   # for the maps (plot_sensitivity.py runs in the nereus env, without this package)
             I, J = slice(L.OLx, L.OLx + L.sNx), slice(L.OLy, L.OLy + L.sNy)
@@ -274,7 +288,8 @@ class Experiment:
                     chunk=self.a.chunk, stride=self.a.stride, schedule=f"chunked/{self.a.schedule}",
                     unroll=self.a.unroll, job=os.environ.get("SLURM_JOB_ID"), git=git_head(),
                     device=str(jax.devices()[0].device_kind), platform=jax.devices()[0].platform,
-                    xla_flags=os.environ.get("XLA_FLAGS", ""), rundir=str(self.a.rundir), box_vol=self.box_vol)
+                    xla_flags=os.environ.get("XLA_FLAGS", ""), rundir=str(self.a.rundir), box_vol=self.box_vol,
+                    j_scaling=self.a.j_scaling)
 
     def controls(self):
         return {k: self.theta0[k] for k in self.a.controls.split(",")}
@@ -513,7 +528,11 @@ def main(argv=None):
     ap.add_argument("--rundir", type=Path, default=RUNDIR)
     ap.add_argument("--cache", type=Path, default=CACHE)
     ap.add_argument("--actions", default="grad", help="comma list: cache,grad,fwdcheck,screen,tl,fd")
-    ap.add_argument("--mode", default="exact", choices=("exact", "ecco"))
+    ap.add_argument("--mode", default="ecco", choices=("exact", "ecco"),
+                    help="backward semantics (default ecco: Nikolay 2026-09-23; exact available)")
+    ap.add_argument("--j-scaling", default="literal", choices=("literal", "kelvin"),
+                    help="literal: J as the Fortran adjsen set-up (double division by the box volume, K/m^3, with a "
+                         "warning); kelvin: box-mean theta in K")
     ap.add_argument("--days", type=float, default=7.0)
     ap.add_argument("--chunk", type=int, default=24, help="steps per chunk (chunked reverse accumulation)")
     ap.add_argument("--stride", type=int, default=1, help="boundary stride (chunk boundaries kept on the host)")
