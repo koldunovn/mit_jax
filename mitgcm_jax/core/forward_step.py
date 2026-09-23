@@ -19,12 +19,18 @@ Order (forward_step.F, flux-forced tree):
   :1034     THERMODYNAMICS (GMREDI_RESIDUAL_FLOW, GAD_ADVECTION, TEMP/SALT_INTEGRATE)
   :1049     TRACERS_CORRECTION_STEP (nothing in V4r4)
   :1080     DO_FIELDS_BLOCKING_EXCHANGES (theta, salt; staggerTimeStep=T, storePhiHyd4Phys=F, no GGL90 horizdiff)
+
+Backward-mode seams (plan Task 17, mitgcm_jax/adjoint/modes.py, docs/ADJOINT_MODES.md): `adj` (a static
+AdjointConfig, default exact = no seam) selects which derivatives the reverse pass keeps. Every seam is marked
+`# ADJOINT SEAM` below; none changes a forward value (stop_gradient / differentiate_at are the identity forward).
 """
 
+import dataclasses
 from typing import NamedTuple
 
 import jax.numpy as jnp
 
+from mitgcm_jax.adjoint.modes import EXACT, differentiate_at, stop_gradient_if, visc_params_in_ad
 from mitgcm_jax.core import dynamics as dyn_mod
 from mitgcm_jax.core import external_forcing as ef
 from mitgcm_jax.core import free_surface as fs
@@ -37,6 +43,7 @@ from mitgcm_jax.pkgs import exf_fluxforced as exf_mod
 from mitgcm_jax.pkgs import gad as gad_mod
 from mitgcm_jax.pkgs import ggl90 as ggl_mod
 from mitgcm_jax.pkgs import gmredi as gm_mod
+from mitgcm_jax.pkgs import mom_common as mc
 from mitgcm_jax.pkgs import mom_vecinv as mv_mod
 from mitgcm_jax.pkgs import salt_plume as sp_mod
 from mitgcm_jax.state import State
@@ -63,26 +70,38 @@ class ModelParams(NamedTuple):
     tc: object
 
 
-def do_oceanic_phys(P, g, ex, f, kLowC):
+def do_oceanic_phys(P, g, ex, f, kLowC, adj=EXACT):
     """ff/do_oceanic_phys.F: returns the dict of fields it writes (FFIELDS surface forcing, rhoInSitu, sigma*,
-    IVDConvCount, hMixLayer, saltPlumeDepth, GGL90*, GM/Redi tensor + Psi). f: fields at DO_OCEANIC_PHYS entry."""
+    IVDConvCount, hMixLayer, saltPlumeDepth, GGL90*, GM/Redi tensor + Psi). f: fields at DO_OCEANIC_PHYS entry.
+    adj: backward-mode semantics (adjoint/modes.py); forward values are the same in every mode."""
     out = {}
     ff = {k: f[k] for k in FF_FIELDS}
+    # ADJOINT SEAM salt_plume="off" (useSALT_PLUMEinAdMode=F): the reverse sweep skips SALT_PLUME_DO_EXCH (:579-582),
+    # SALT_PLUME_FORCING_SURF (external_forcing_surf.F:235-239) and SALT_PLUME_TENDENCY_APPLY_S (apply_forcing.F:931)
+    ff["saltPlumeFlux"] = stop_gradient_if(adj.salt_plume == "off", ff["saltPlumeFlux"])
     ff, sfo, spd = ef.oceanic_phys_forcing(P.sf, g, ex, ff, f["saltPlumeDepth"], f["theta"], f["salt"])  # :288-614
     out.update(ff)
     out.update(sfo)                        # surfaceForcingU/V/T/S, PmEpR, phi0surf
     # tile loop (:616-1110): zeroing, FIND_RHO_2D, GRAD_SIGMA, CALC_IVDC, CALC_OCE_MXLAYER (:640-945)
     r = rs_mod.rho_sigma_ivdc_mxlayer(P.rs, g, f["theta"], f["salt"], f["hMixLayer"])
     out.update(rhoInSitu=r["rhoInSitu"], IVDConvCount=r["IVDConvCount"], hMixLayer=r["hMixLayer"])
+    # ADJOINT SEAM gm_sigma="stable": :900-907 ZERO_ADJ_LOC(sigmaX/Y/R) (GMREDI_WITH_STABLE_ADJOINT) cuts the adjoint
+    # of the density gradients for every reader (GGL90_CALC, GMREDI_CALC_TENSOR; CALC_IVDC's flag and
+    # CALC_OCE_MXLAYER carry no derivative); rhoInSitu keeps its derivative
+    sigX, sigY, sigR = stop_gradient_if(adj.gm_sigma == "stable", r["sigmaX"], r["sigmaY"], r["sigmaR"])
     # :949 SALT_PLUME_CALC_DEPTH (saltPlumeDepth was zeroed at :292)
-    out["saltPlumeDepth"] = sp_mod.salt_plume_calc_depth(P.sp, P.rs.eos, g, r["rhoInSitu"][:, 0], f["theta"],
-                                                         f["salt"], kLowC)
+    out["saltPlumeDepth"] = stop_gradient_if(  # ADJOINT SEAM salt_plume="off" (:948-951 skipped in the reverse)
+        adj.salt_plume == "off",
+        sp_mod.salt_plume_calc_depth(P.sp, P.rs.eos, g, r["rhoInSitu"][:, 0], f["theta"], f["salt"], kLowC))
     # :1063 GGL90_CALC (viscArU/V, diffKr zeroed at :661-667; the kernel returns zeros outside its loops)
-    tke, vU, vV, dK = ggl_mod.ggl90_calc(P.ggl, g, f["GGL90TKE"], f["uVel"], f["vVel"], r["sigmaR"],
+    tke, vU, vV, dK = ggl_mod.ggl90_calc(P.ggl, g, f["GGL90TKE"], f["uVel"], f["vVel"], sigR,
                                          sfo["surfaceForcingU"], sfo["surfaceForcingV"], f["recip_hFacC"])
+    # ADJOINT SEAM ggl90="frozen" (useGGL90inAdMode=F): no derivative through GGL90_CALC; the implicit solves keep
+    # the forward kappaRk / kappaRU / kappaRV (TAF STOREs them after the GGL90 terms: docs/ADJOINT_MODES.md)
+    tke, vU, vV, dK = stop_gradient_if(adj.ggl90 == "frozen", tke, vU, vV, dK)
     out.update(GGL90TKE=tke, GGL90viscArU=vU, GGL90viscArV=vV, GGL90diffKr=dK)
     # :1100 GMREDI_CALC_TENSOR, :1163 GMREDI_DO_EXCH
-    t = gm_mod.gmredi_calc_tensor(P.gm, g, r["sigmaX"], r["sigmaY"], r["sigmaR"], g.kapGM, g.kapRedi)
+    t = gm_mod.gmredi_calc_tensor(P.gm, g, sigX, sigY, sigR, g.kapGM, g.kapRedi)
     psx, psy = gm_mod.gmredi_do_exch(P.gm, ex, t["GM_PsiX"], t["GM_PsiY"])
     t = dict(t, GM_PsiX=psx, GM_PsiY=psy)
     out.update(t)
@@ -90,7 +109,30 @@ def do_oceanic_phys(P, g, ex, f, kLowC):
     return out
 
 
-def forward_step(P, g, ex, kLowC, st: State, exf_in):
+def _mom_vecinv_visc(p, g, uVel, vVel, wVel, hFacC, hFacW, hFacS, recip_hFacC, recip_hFacW, recip_hFacS, kU, kV,
+                     visc):
+    """MOM_VECINV (gU, gV, guDissip, gvDissip) with the viscosities passed in (visc=None: computed inside)."""
+    o = mv_mod.mom_vecinv(p, g, uVel, vVel, wVel, hFacC, hFacW, hFacS, recip_hFacC, recip_hFacW, recip_hFacS, kU, kV,
+                          visc=visc)
+    return o["gU"], o["gV"], o["guDissip"], o["gvDissip"]
+
+
+def mom_vecinv_adj(P, g, adj, uVel, vVel, wVel, hFacC, hFacW, hFacS, recip_hFacC, recip_hFacW, recip_hFacS, kU, kV):
+    """MOM_VECINV as DYNAMICS calls it (dynamics.F:536), with the viscFacInAd seam of `adj`."""
+    args = (P.mv, g, uVel, vVel, wVel, hFacC, hFacW, hFacS, recip_hFacC, recip_hFacW, recip_hFacS, kU, kV)
+    if adj.visc_fac_in_ad is None:
+        return _mom_vecinv_visc(*args, None)
+    # ADJOINT SEAM visc_fac_in_ad: the TAF reverse sweep recomputes MOM_CALC_VISC with viscFacAdj = viscFacInAd
+    # (autodiff_inadmode_set_ad.F:53; V4r4 mom_calc_visc.F:406,425,516,535; the viscosities are not STOREd) and
+    # differentiates MOM_VECINV there
+    visc = mc.mom_calc_visc(P.mv.visc, g)  # mom_vecinv.F:359-373, as MOM_VECINV computes it itself
+    visc_ad = mc.mom_calc_visc(visc_params_in_ad(P.mv.visc, adj.visc_fac_in_ad), g)
+    return differentiate_at(_mom_vecinv_visc, args + (visc,), args + (visc_ad,))
+
+
+def forward_step(P, g, ex, kLowC, st: State, exf_in, adj=EXACT):
+    """One FORWARD_STEP. adj: static AdjointConfig (backward-mode semantics; forward values identical in every
+    mode)."""
     f = dict(st.f)
     aux = {}
     myIter = st.it
@@ -108,7 +150,7 @@ def forward_step(P, g, ex, kLowC, st: State, exf_in):
     f.update({k: ff[k] for k in FF_FIELDS if k in ff})
     aux["S02_load_fields"] = dict(exf, **ff)
     # :609 DO_OCEANIC_PHYS
-    op = do_oceanic_phys(P, g, ex, f, kLowC)
+    op = do_oceanic_phys(P, g, ex, f, kLowC, adj)
     sig = op.pop("_sigma")
     aux["P02"] = {"sigmaX": sig[0], "sigmaY": sig[1], "sigmaR": sig[2]}
     f.update({k: v for k, v in op.items() if k in f or k in ("PmEpR",)})
@@ -117,9 +159,8 @@ def forward_step(P, g, ex, kLowC, st: State, exf_in):
     uVel, vVel, wVel = f["uVel"], f["vVel"], f["wVel"]
 
     def mom_vecinv(kU, kV):
-        o = mv_mod.mom_vecinv(P.mv, g, uVel, vVel, wVel, f["hFacC"], f["hFacW"], f["hFacS"], f["recip_hFacC"],
+        return mom_vecinv_adj(P, g, adj, uVel, vVel, wVel, f["hFacC"], f["hFacW"], f["hFacS"], f["recip_hFacC"],
                               f["recip_hFacW"], f["recip_hFacS"], kU, kV)
-        return o["gU"], o["gV"], o["guDissip"], o["gvDissip"]
 
     s = {"uVel": uVel, "vVel": vVel, "guNm": jnp.stack([f["guNm_1"], f["guNm_2"]]),
          "gvNm": jnp.stack([f["gvNm_1"], f["gvNm_2"]]), "etaH": f["etaH"], "rStarFacC": f["rStarFacC"],
@@ -136,7 +177,10 @@ def forward_step(P, g, ex, kLowC, st: State, exf_in):
                             "rStarFacW", "rStarFacS", "recip_hFacC", "recip_hFacW", "recip_hFacS", "pW", "pS",
                             "pC")}
     s2["Bo_surf"], s2["recip_Bo"] = g.Bo_surf, g.recip_Bo
-    a = sfp.step_after_dynamics(P.fs, P.cg, g, ex, s2)
+    cg = P.cg
+    if adj.cg2d == "passive":  # ADJOINT SEAM: cg2d.flow:7-12, operator aW2d/aS2d/aC2d passive in the adjoint
+        cg = dataclasses.replace(P.cg, stop_coeff_grad=True)
+    a = sfp.step_after_dynamics(P.fs, cg, g, ex, s2)
     aux["cg2d"] = a.pop("cg2d")
     aux["rstar_checks"] = a.pop("rstar_checks")
     for k, v in a.items():

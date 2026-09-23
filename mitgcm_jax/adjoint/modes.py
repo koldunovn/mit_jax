@@ -1,0 +1,162 @@
+"""Backward-mode semantics of the V4r4 flux-forced adjoint (plan Task 17; the TAF analysis is docs/ADJOINT_MODES.md).
+
+`AdjointConfig` is a static, hashable configuration that says which derivatives the reverse pass keeps. Every switch
+acts on derivatives only: the forward values are byte-identical in every mode (tested on the FORCED oracle step). The
+default `AdjointConfig()` is the exact mode: no seam is inserted anywhere, the traced program is the one `jax.grad`
+has always differentiated.
+
+    adj = AdjointConfig()                    # exact (default)
+    adj = AdjointConfig.ecco(RunNamelists(rundir))   # what the TAF adjoint of this build and data.autodiff computes
+    st1, aux = forward_step(P, g, ex, kLowC, st0, exf_in, adj=adj)   # adj is static (close over it or mark static)
+
+Switches (value in the ECCO mode of the V4r4 flux-forced build; each seam sits in core/forward_step.py):
+
+  ggl90       "exact" | "frozen"   ecco: "frozen" (data.autodiff useGGL90inAdMode = .FALSE.). TAF skips GGL90_CALC,
+              GGL90_CALC_VISC and GGL90_CALC_DIFF in the reverse sweep, but the total vertical diffusivity kappaRk
+              (temp_integrate.F:488/505, salt_integrate.F:480/497) and viscosity kappaRU/kappaRV (dynamics.F:399-402)
+              are STOREd on the tape after the GGL90 contributions were added, so the linearised implicit
+              diffusion/viscosity uses the forward (GGL90-inclusive) coefficients, and no derivative reaches the TKE or
+              the coefficients' state dependence. JAX: lax.stop_gradient on the four GGL90_CALC outputs (GGL90TKE,
+              GGL90viscArU/V, GGL90diffKr).
+  gm_sigma    "exact" | "stable"   ecco: "stable" (GMREDI_WITH_STABLE_ADJOINT, flux-forced GMREDI_OPTIONS.h:21: TAF's
+              ZERO_ADJ_LOC on sigmaX/Y/R, ff do_oceanic_phys.F:900-907). JAX: lax.stop_gradient on sigmaX/Y/R after
+              GRAD_SIGMA, before every reader (GGL90_CALC reads sigmaR too, ggl90_calc.F:218-219); rhoInSitu keeps its
+              derivative. CALC_IVDC's step function has no derivative in either mode.
+  salt_plume  "exact" | "off"      ecco (flux-forced): "exact" (useSALT_PLUMEinAdMode = .TRUE.). "off" is the full-V4r4
+              setting (useSALT_PLUMEinAdMode = .FALSE.): every IF (useSALT_PLUME) block is skipped in the reverse
+              sweep (SALT_PLUME_DO_EXCH, SALT_PLUME_FORCING_SURF, SALT_PLUME_CALC_DEPTH, SALT_PLUME_TENDENCY_APPLY_S),
+              i.e. no derivative through saltPlumeFlux or saltPlumeDepth. JAX: lax.stop_gradient on saltPlumeFlux
+              where it enters DO_OCEANIC_PHYS and on saltPlumeDepth.
+  cg2d        "exact" | "passive"  ecco: "passive" (pkg/autodiff/cg2d.flow:7-12: only cg2d_b and cg2d_x are active; the
+              operator aW2d/aS2d/aC2d is a common block TAF does not differentiate). JAX: Cg2dParams.stop_coeff_grad.
+  visc_fac_in_ad  None | float     ecco: data.autodiff viscFacInAd (default 1.0, autodiff_readparms.F:73; the V4r4
+              trees do not set it). TAF sets viscFacAdj = viscFacInAd for the whole reverse sweep
+              (autodiff_inadmode_set_ad.F:53) and recomputes MOM_CALC_VISC there (no STORE of the viscosities), so the
+              adjoint of MOM_VECINV is taken with the 3-D viscosity file fields scaled by viscFacInAd before clipping
+              (V4r4 mom_calc_visc.F:406,425,516,535). JAX: `differentiate_at` around MOM_VECINV: value at the forward
+              viscosities, derivatives (JVP and VJP) at the viscosities of MOM_CALC_VISC with viscFacAdj=viscFacInAd.
+              None = no seam; 1.0 = seam present, derivatives bitwise equal to the exact mode (tested).
+
+Not switches here: sea ice (useSEAICE = F in the flux-forced run; the full-V4r4 useSEAICEinAdMode = F waits for the
+sea-ice port, M2), KPP (not used), GMRedi in the adjoint (useGMRediInAdMode = T, default), inAdExact (= T, default:
+inAdMode stays .FALSE. in the reverse sweep, autodiff_readparms.F:98-104). Settings that would need an unported
+branch raise NotImplementedError in `AdjointConfig.ecco`.
+
+Forward-mode (JVP) note: TAF's tangent-linear model keeps every package (g_autodiff_inadmode_set.F only sets
+inAdMode = .FALSE.). A non-exact AdjointConfig also cuts tangents (stop_gradient is a zero tangent), so use the exact
+mode for tangent-linear work unless the ECCO approximation is wanted there too.
+"""
+
+import dataclasses
+from dataclasses import dataclass
+from functools import partial
+from typing import Optional
+
+import jax
+from jax import lax
+
+# flux-forced/code/GMREDI_OPTIONS.h:21  #define GMREDI_WITH_STABLE_ADJOINT  (ZERO_ADJ_LOC on sigmaX/Y/R in the adjoint)
+GMREDI_WITH_STABLE_ADJOINT = True
+
+_CHOICES = {"ggl90": ("exact", "frozen"), "gm_sigma": ("exact", "stable"), "salt_plume": ("exact", "off"),
+            "cg2d": ("exact", "passive")}
+
+
+@dataclass(frozen=True)
+class AdjointConfig:
+    """Static reverse-mode semantics per package (see the module docstring). Hashable; the default is exact."""
+    ggl90: str = "exact"
+    gm_sigma: str = "exact"
+    salt_plume: str = "exact"
+    cg2d: str = "exact"
+    visc_fac_in_ad: Optional[float] = None
+
+    def __post_init__(self):
+        for name, allowed in _CHOICES.items():
+            if getattr(self, name) not in allowed:
+                raise ValueError(f"AdjointConfig.{name} = {getattr(self, name)!r}; allowed: {allowed}")
+        if self.visc_fac_in_ad is not None:
+            object.__setattr__(self, "visc_fac_in_ad", float(self.visc_fac_in_ad))
+
+    @property
+    def is_exact(self):
+        return self == AdjointConfig()
+
+    @classmethod
+    def exact(cls):
+        return cls()
+
+    @classmethod
+    def ecco(cls, nml):
+        """The reverse-mode semantics of the TAF adjoint of this build with the run's data.autodiff and data.pkg
+        (nml: params_io.RunNamelists of the run directory). Defaults are autodiff_readparms.F:66-73; the
+        in-adjoint package switches are ANDed with the forward ones (autodiff_readparms.F:116-120)."""
+        if not nml.file("data.autodiff"):
+            # autodiff_readparms.F:83-89 OPEN_COPY_DATA_FILE('data.autodiff') stops when the file is missing
+            raise FileNotFoundError(f"{nml.dir}/data.autodiff: the TAF adjoint reads it (autodiff_readparms.F:83)")
+        ad = lambda key, default: nml.get("data.autodiff", "autodiff_parm01", key, default=default)  # noqa: E731
+        pkg = lambda key: bool(nml.get("data.pkg", "packages", key, default=False))  # noqa: E731  packages_boot.F
+        if not ad("inAdExact", True):  # autodiff_readparms.F:71
+            # inAdMode = .TRUE. in the reverse sweep only changes DST3-flux-limited advection (gad_calc_rhs.F:245,
+            # 385, 516, 559), which V4r4 does not use; not ported
+            raise NotImplementedError("inAdExact = .FALSE. (inAdMode branches) is not ported")
+        if pkg("useKPP"):
+            raise NotImplementedError("useKPP: pkg/kpp is not ported")
+        if pkg("useSEAICE"):
+            raise NotImplementedError("useSEAICE: sea ice and useSEAICEinAdMode / SEAICE_FAKE are M2 (not ported)")
+        useGMRedi, useGGL90, useSALT_PLUME = pkg("useGMRedi"), pkg("useGGL90"), pkg("useSALT_PLUME")
+        if useGMRedi and not ad("useGMRediInAdMode", True):  # autodiff_readparms.F:67
+            raise NotImplementedError("useGMRediInAdMode = .FALSE. (GM/Redi off in the adjoint) is not ported")
+        ggl_in_ad = ad("useGGL90inAdMode", True) and useGGL90  # autodiff_readparms.F:69, 119
+        sp_in_ad = ad("useSALT_PLUMEinAdMode", True) and useSALT_PLUME  # autodiff_readparms.F:70, 120
+        for key in ("SEAICEuseFREEDRIFTswitchInAd", "SEAICEuseDYNAMICSswitchInAd"):  # autodiff_readparms.F:76-77
+            if ad(key, False):
+                raise NotImplementedError(f"{key}: sea ice is not ported")
+        return cls(
+            ggl90="frozen" if (useGGL90 and not ggl_in_ad) else "exact",
+            gm_sigma="stable" if (useGMRedi and GMREDI_WITH_STABLE_ADJOINT) else "exact",
+            salt_plume="off" if (useSALT_PLUME and not sp_in_ad) else "exact",
+            cg2d="passive",  # pkg/autodiff/cg2d.flow:7-12 (every TAF build)
+            visc_fac_in_ad=float(ad("viscFacInAd", 1.0)),  # autodiff_readparms.F:73
+        )
+
+
+def stop_gradient_if(flag, *xs):
+    """lax.stop_gradient on every array of `xs` when `flag` (a static Python bool), else `xs` unchanged. The forward
+    value is untouched (stop_gradient lowers to nothing)."""
+    if not flag:
+        return xs if len(xs) != 1 else xs[0]
+    out = tuple(jax.tree_util.tree_map(lax.stop_gradient, x) for x in xs)
+    return out if len(out) != 1 else out[0]
+
+
+@partial(jax.custom_jvp, nondiff_argnums=(0,))
+def differentiate_at(fn, args, alt):
+    """Value `fn(*args)`; derivatives (JVP, and the VJP JAX derives from it by transposition) of `fn` taken at the
+    point `alt` (same pytree structure as `args`) instead of `args`. Tangents/cotangents are those of `args`; `alt`
+    carries none. `fn` must be a module-level function (no closed-over tracers): pass every array through `args`.
+
+    TAF analogue: a routine the reverse sweep recomputes with different parameters (viscFacAdj = viscFacInAd inside
+    MOM_CALC_VISC). With alt == args the derivatives are those of plain autodiff (bitwise, tested)."""
+    return fn(*args)
+
+
+@differentiate_at.defjvp
+def _differentiate_at_jvp(fn, primals, tangents):
+    args, alt = primals
+    t_args, _ = tangents
+    out = fn(*args)
+    _, t_out = jax.jvp(lambda *a: fn(*a), tuple(alt), tuple(t_args))
+    return out, t_out
+
+
+def visc_params_in_ad(pvisc, factor):
+    """MomViscParams as MOM_CALC_VISC sees them in the TAF reverse sweep: viscFacAdj = viscFacInAd
+    (autodiff_inadmode_set_ad.F:53; forward value 1, set_defaults.F:131)."""
+    return dataclasses.replace(pvisc, viscFacAdj=factor)
+
+
+EXACT = AdjointConfig()
+
+__all__ = ["AdjointConfig", "EXACT", "GMREDI_WITH_STABLE_ADJOINT", "differentiate_at", "stop_gradient_if",
+           "visc_params_in_ad"]
