@@ -34,6 +34,8 @@ built with `-ffp-contract=off`) and pass float parameters as traced pytree leave
 | **production config on one A100, full year 1992 (8760 steps) vs Fortran 96 ranks** | daily global %MON over 365 days: theta/salt <= 1.6e-10 rel (means 3e-14), eta <= 5e-11, u/v <= 4.7e-9, w <= 2.2e-8 (w mean 4e-16 abs); runs_jax/ff_prod_1992_gpu_v2/compare_vs_fortran_mpi96_year.txt; maps: runs_jax/diff_maps/ff_year_jax_vs_fortran.png (end of year, float64: SST <= 1e-6 K, SSH <= 4e-9 m) |
 | discrete volume / SSH / heat / salt budgets per step (48 steps) | close to round-off: <= 5.4 / 0.8 / 37 / 7.7 floors; Fortran's own steps <= 3.5; negative controls >= 1e4 floors (test_budgets) |
 | Fortran yardsticks | 96-rank twin bitwise; 13-tile vs 96-rank spread 1e-8 after 1 day; 11 steps vs PO.DAAC product T 4e-4 max |
+| **full V4r4 (EXF bulk + sea ice), one month on one GH200** (production XLA flags, Pallas LSR; 0.27 s/step) vs Fortran 13 tiles | every one of 124 hourly %MON statistics (ocean, sea ice, EXF) closer to the Fortran 13-tile run than the Fortran 96-rank run is (typically 10-1000x): e.g. mean theta 2e-10 vs 1.7e-8, SSH sd 2e-8 vs 2e-5, ice area mean 8.7e-7 vs 4.7e-6 |
+| full V4r4, step 1 / free run to it 4 / 24 steps from the pickup (CPU gate flags) | bitwise (820 stage fields; every State field vs the Fortran pickups) (test_step_full) |
 | sharded: shard_map P=2, P=4 (CPU fake devices) | bitwise == P=1 full step (test_sharded, test_sharded_step) |
 | 4 A100 vs 1 A100 (Task 20) | forward bitwise after 24 steps; GPU floor 0; gradient 1.5e-11 |
 
