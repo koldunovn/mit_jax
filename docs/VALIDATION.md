@@ -64,6 +64,21 @@ CUDA runs the forward sweep as one Pallas kernel: whole dynsolver 0.78 / 0.51 / 
 outputs, same sweep counts); other GPUs the fully unrolled XLA sweep (1.70 / 1.12 / 0.82 s GH200, 2.87 / 1.89 / 1.39 s
 A100). scripts/runs/lsr_perf_bench.py --full (jobs 27648486, 27648487).
 
+## Speed: full V4r4 (EXF bulk + sea ice), one model year = 8760 steps (2026-09-24)
+| run | s/step | one year |
+|---|---|---|
+| Fortran 96 ranks (one Levante node, 96 cores) | 0.20 | 29 min (measured) |
+| JAX, 1 GH200 (dolpung) | 0.29 | 46 min (measured, no output; 48 min with frames + monthly states) |
+| JAX, 1 A100-80 | 0.43 | 68 min (measured) |
+| JAX, 4 A100-80 (shard_map, one node) | 0.47 | ~70 min (240 steps) |
+| JAX, 4 GH200 (shard_map, one node) | 0.45 | ~67 min (48 steps) |
+| Fortran 13 ranks | 0.60 | 87 min (measured; rank placement matters) |
+| Fortran 1 process (13 tiles) | ~3.8 | ~9 h |
+
+More GPUs are slower at LLC90 (exchange cost > work saved); the sequential sea-ice LSR sweeps (Pallas kernel,
+~0.2 s/step) dominate a GPU step; the ocean alone is 0.10 s/step on a GH200 (flux-forced year ~15 min).
+scripts/runs/full_speed_bench.py; logs /work/.../MIT/runs/speed/.
+
 ## Acceptance criteria for runs with sea ice (Nikolay, 2026-09-23)
 - Bitwise: CPU with the gate XLA flags vs the Fortran 13 ranks (the full-V4r4 month passes).
 - GPU / production XLA flags: sea-ice exact-zero branches make the runs diverge from the Fortran after a few steps, so
