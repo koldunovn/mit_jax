@@ -101,6 +101,17 @@ class ChunkedGrad(NamedTuple):
     chunk_steps: int
     boundary_stride: int
     schedule: str
+    field_trace: list = None   # per chunk boundary (same order as `trace`): {State field: cotangent norm}, so a screen
+                               # can say WHICH field grows (the total norm mixes units: K, psu, m/s, m, hFac, ...)
+
+
+def field_norms(ct):
+    """{field: Euclidean norm} of a State cotangent (floating fields; {} for a cotangent without a field dict)."""
+    f = getattr(ct, "f", None)
+    if not isinstance(f, dict):
+        return {}
+    return {k: float(jnp.sqrt(jnp.sum(jnp.square(v)))) for k, v in sorted(f.items())
+            if hasattr(v, "dtype") and jnp.issubdtype(v.dtype, jnp.floating)}
 
 
 def cotangent_norm(tree):
@@ -188,6 +199,7 @@ def chunked_value_and_grad(step, theta, model, st0, *, n_chunks, chunk_steps, xs
     cot = (_state_ct(cot[0]), cot[1])
     fwd_t = time.time() - t0
     trace = [cotangent_norm(cot[0])]
+    ftrace = [field_norms(cot[0])]
     say(f"chunked forward: {n_chunks} chunks x {chunk_steps} steps, J = {float(loss):.16e}, host {host_gb:.2f} GB, "
         f"{fwd_t:.1f} s")
     del carry
@@ -207,6 +219,7 @@ def chunked_value_and_grad(step, theta, model, st0, *, n_chunks, chunk_steps, xs
             cot = (_state_ct(cot[0]), cot[1])
             grad = _add(grad, g_c)
             trace.append(cotangent_norm(cot[0]))
+            ftrace.append(field_norms(cot[0]))
             if on_chunk is not None:
                 on_chunk(c, trace[-1])
         del span
@@ -215,7 +228,8 @@ def chunked_value_and_grad(step, theta, model, st0, *, n_chunks, chunk_steps, xs
     grad = _add(grad, pull0(cot[0])[0])
     rev_t = time.time() - t1
     say(f"chunked reverse: {rev_t:.1f} s")
-    return ChunkedGrad(float(loss), grad, trace, host_gb, fwd_t, rev_t, n_chunks, chunk_steps, stride, schedule)
+    return ChunkedGrad(float(loss), grad, trace, host_gb, fwd_t, rev_t, n_chunks, chunk_steps, stride, schedule,
+                       ftrace)
 
 
 def chunks_of(xs, chunk_steps):

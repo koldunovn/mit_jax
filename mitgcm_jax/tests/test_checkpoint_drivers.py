@@ -134,3 +134,17 @@ def test_fd_sweep_and_amplification():
     assert abs(a.median - 1.005) < 1e-12 and a.log_spread < 1e-12 and a.passes
     tr2 = tr[:3] + [tr[3] * 1e3] + [t * 1e3 for t in tr[4:]]
     assert not gr.amplification(tr2, 4).passes
+
+
+def test_chunked_field_trace():
+    """ChunkedGrad.field_trace (Task 21): per-field cotangent norms at every chunk boundary, same order as `trace`, and
+    their root-sum-square is the total norm; a field the step passes through unchanged accumulates (toy: none)."""
+    model, st0, xs = _setup()
+    th = {"a": st0.f["a"], "b": st0.f["b"]}
+    xs_fn, nch = gr.chunks_of(xs, 3)
+    r = gr.chunked_value_and_grad(_step, th, model, st0, n_chunks=nch, chunk_steps=3, xs_fn=xs_fn,
+                                  final_cost=_final_cost, cost=_cost)
+    assert len(r.field_trace) == len(r.trace) == nch + 1
+    for tot, per in zip(r.trace, r.field_trace):
+        assert set(per) == {"a", "b", "c"}
+        np.testing.assert_allclose(np.sqrt(sum(v ** 2 for v in per.values())), tot, rtol=1e-12)
