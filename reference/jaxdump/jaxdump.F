@@ -12,6 +12,9 @@
 #ifdef ALLOW_SALT_PLUME
 # include "SALT_PLUME_OPTIONS.h"
 #endif
+#ifdef ALLOW_SEAICE
+# include "SEAICE_OPTIONS.h"
+#endif
 
 C=====================================================================================================================
 C  jaxdump.F -- per-substep dump shim for the mitgcm-jax Fortran oracle (plan Task 5).
@@ -34,7 +37,7 @@ C===============================================================================
       BLOCK DATA JAXDUMP_BD
       IMPLICIT NONE
 #include "JAXDUMP.h"
-      DATA jd_inited /.FALSE./, jd_on /.FALSE./, jd_seq /0/
+      DATA jd_inited /.FALSE./, jd_on /.FALSE./, jd_seq /0/, jd_pass /0/
       END
 
 C---------------------------------------------------------------------------------------------------------------------
@@ -143,6 +146,8 @@ C     Write one tile's array (halos included) as one record.
       WRITE(fn,'(2A,I10.10,A,I4.4,A)') jd_dir(1:ILNBLNK(jd_dir)),
      &     '/jd_', myIter, '_t', tile, '.bin'
       cstage = stage
+      IF ( jd_pass .GT. 0 ) WRITE(cstage,'(2A,I0)')
+     &   stage(1:ILNBLNK(stage)), '_p', jd_pass
       cname  = fname
       ckind  = kind
       hdr(1) = 1245990224
@@ -211,6 +216,19 @@ C       G geometry  grid metrics, masks, Coriolis, angles, 3-D masks and mixing 
 C       V vertical  1-D vertical grid packed into one 2-D record of tile 1 (JAXDUMP_GEOM)
 C       R r* extra  rStarFacNm1, rStarExp, rStarDh*Dt, h0Fac, etaHnm1, hFac_surf, Bo_surf (JAXDUMP_GEOM)
 C       X exchange  probe of every exch2 exchange type on index-coded fields (JAXDUMP_EXCH_PROBE)
+C     M2 (full tree; JAXDUMP_SEAICE, JAXDUMP_EXFB):
+C       i sea ice   AREA, HEFF, HSNOW, TICES (nITD levels) (+ HSALT with SEAICE_VARIABLE_SALINITY)
+C       u ice vel.  UICE, VICE
+C       y ice dyn.  seaiceMassC/U/V, TAUX, TAUY, FORCEX0/Y0, PRESS0, ZMAX, ZMIN, tensileStrFac, seaiceMaskU/V,
+C                   uice_fd, vice_fd
+C       v rheology  e11, e22, e12, deltaC, ETA, etaZ, ZETA, zetaZ, PRESS, DWATN, FORCEX, FORCEY, uIceNm1,
+C                   vIceNm1, stressDivergenceX/Y
+C       h ice aux   d_HEFFbyNEG, d_HSNWbyNEG, saltWtrIce, frWtrIce
+C       I ice fixed HEFFM, k1AtC, k1AtZ, k2AtC, k2AtZ
+C       b EXF atm.  uwind, vwind, wspeed, wStress, cw, sw, sh, atemp, aqh, hs, hl, lwflux, evap, precip,
+C                   snowprecip, swdown, lwdown, zen_albedo, zen_fsol_diurnal, zen_fsol_daily, runoff
+C       e EXF recs  bracketing records <fld>0, <fld>1 of ustress vstress wspeed atemp aqh precip swdown lwdown
+C                   apressure runoff (time interpolation inputs)
       SUBROUTINE JAXDUMP_STATE( stage, groups, bi0, bj0, myIter,
      &   myThid )
       IMPLICIT NONE
@@ -251,6 +269,16 @@ C       X exchange  probe of every exch2 exchange type on index-coded fields (JA
      &  CALL JAXDUMP_GEOM( stage, groups, bi0, bj0, myIter, myThid )
       IF ( INDEX(groups,'X') .GT. 0 )
      &  CALL JAXDUMP_EXCH_PROBE( stage, myIter, myThid )
+#ifdef ALLOW_SEAICE
+      IF ( INDEX(groups,'i') .GT. 0 .OR. INDEX(groups,'u') .GT. 0
+     &     .OR. INDEX(groups,'y') .GT. 0 .OR. INDEX(groups,'v') .GT. 0
+     &     .OR. INDEX(groups,'h') .GT. 0 .OR. INDEX(groups,'I') .GT. 0 )
+     &  CALL JAXDUMP_SEAICE( stage, groups, bi0, bj0, myIter, myThid )
+#endif
+#ifdef ALLOW_EXF
+      IF ( INDEX(groups,'b') .GT. 0 .OR. INDEX(groups,'e') .GT. 0 )
+     &  CALL JAXDUMP_EXFB( stage, groups, bi0, bj0, myIter, myThid )
+#endif
       IF ( INDEX(groups,'d') .GT. 0 ) THEN
        CALL JAXDUMP_FLD(stage,'uVel','W',uVel,Nr,bi0,bj0,myIter,myThid)
        CALL JAXDUMP_FLD(stage,'vVel','S',vVel,Nr,bi0,bj0,myIter,myThid)
@@ -482,6 +510,307 @@ C     Dump a 2-D slice of level k of a routine-local array inside a k loop; fiel
      &                    bi, bj, myIter, myThid )
       RETURN
       END
+
+C---------------------------------------------------------------------------------------------------------------------
+C     Stage-name suffix for stages inside an iteration loop: n > 0 appends '_p<n>' to the stage name of every record
+C     written until JAXDUMP_PASS(0). Only sets a counter (no effect on the model, dumps on or off).
+      SUBROUTINE JAXDUMP_PASS( n )
+      IMPLICIT NONE
+#include "JAXDUMP.h"
+      INTEGER n
+      jd_pass = n
+      RETURN
+      END
+
+C---------------------------------------------------------------------------------------------------------------------
+C     Dump a routine-local INTERIOR-only array arr(1:sNx,1:sNy,nz) of ONE tile (e.g. the (1:sNx,1:sNy) work arrays of
+C     SEAICE_GROWTH, EXF_BULKFORMULAE); halo points of the record are written as 0.
+      SUBROUTINE JAXDUMP_TILEI( stage, fname, kind, arr, nz,
+     &                          bi, bj, myIter, myThid )
+      IMPLICIT NONE
+#include "SIZE.h"
+#include "JAXDUMP.h"
+      CHARACTER*(*) stage, fname, kind
+      INTEGER nz, bi, bj, myIter, myThid
+      _RL arr(1:sNx,1:sNy,nz)
+      _RL buf(1-OLx:sNx+OLx,1-OLy:sNy+OLy,nz)
+      LOGICAL JAXDUMP_ACTIVE
+      EXTERNAL JAXDUMP_ACTIVE
+      INTEGER i, j, k
+      IF ( .NOT. JAXDUMP_ACTIVE( myIter, myThid ) ) RETURN
+      jd_seq = jd_seq + 1
+      DO k = 1, nz
+       DO j = 1-OLy, sNy+OLy
+        DO i = 1-OLx, sNx+OLx
+         buf(i,j,k) = 0. _d 0
+        ENDDO
+       ENDDO
+       DO j = 1, sNy
+        DO i = 1, sNx
+         buf(i,j,k) = arr(i,j,k)
+        ENDDO
+       ENDDO
+      ENDDO
+      CALL JAXDUMP_WRITE( stage, fname, kind, buf, nz,
+     &                    bi, bj, myIter, myThid )
+      RETURN
+      END
+
+C---------------------------------------------------------------------------------------------------------------------
+C     Dump a scalar (iteration count, convergence measure, ...) as a constant 2-D field on every tile (kind 'N').
+      SUBROUTINE JAXDUMP_SCALAR( stage, fname, val, myIter, myThid )
+      IMPLICIT NONE
+#include "SIZE.h"
+#include "JAXDUMP.h"
+      CHARACTER*(*) stage, fname
+      _RL val
+      INTEGER myIter, myThid
+      _RL sbuf(1-OLx:sNx+OLx,1-OLy:sNy+OLy,1,nSx,nSy)
+      LOGICAL JAXDUMP_ACTIVE
+      EXTERNAL JAXDUMP_ACTIVE
+      INTEGER i, j, bi, bj
+      IF ( .NOT. JAXDUMP_ACTIVE( myIter, myThid ) ) RETURN
+      jd_seq = jd_seq + 1
+      DO bj = 1, nSy
+       DO bi = 1, nSx
+        DO j = 1-OLy, sNy+OLy
+         DO i = 1-OLx, sNx+OLx
+          sbuf(i,j,1,bi,bj) = val
+         ENDDO
+        ENDDO
+       ENDDO
+      ENDDO
+      CALL JAXDUMP_FLD( stage, fname, 'N', sbuf, 1, 0, 0,
+     &                  myIter, myThid )
+      RETURN
+      END
+
+#ifdef ALLOW_SEAICE
+C---------------------------------------------------------------------------------------------------------------------
+C     Sea-ice groups i u y v h I (M2). Called from JAXDUMP_STATE (already active).
+      SUBROUTINE JAXDUMP_SEAICE( stage, groups, bi0, bj0, myIter,
+     &                           myThid )
+      IMPLICIT NONE
+#include "SIZE.h"
+#include "EEPARAMS.h"
+#include "PARAMS.h"
+#include "SEAICE_SIZE.h"
+#include "SEAICE_PARAMS.h"
+#include "SEAICE.h"
+      CHARACTER*(*) stage, groups
+      INTEGER bi0, bj0, myIter, myThid
+
+      IF ( INDEX(groups,'i') .GT. 0 ) THEN
+       CALL JAXDUMP_FLD(stage,'AREA','C',AREA,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'HEFF','C',HEFF,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'HSNOW','C',HSNOW,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'TICES','C',TICES,nITD,bi0,bj0,myIter,
+     &                  myThid)
+#ifdef SEAICE_VARIABLE_SALINITY
+       CALL JAXDUMP_FLD(stage,'HSALT','C',HSALT,1,bi0,bj0,myIter,
+     &                  myThid)
+#endif
+      ENDIF
+      IF ( INDEX(groups,'u') .GT. 0 ) THEN
+       CALL JAXDUMP_FLD(stage,'UICE','W',UICE,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'VICE','S',VICE,1,bi0,bj0,myIter,myThid)
+      ENDIF
+#ifdef SEAICE_CGRID
+      IF ( INDEX(groups,'y') .GT. 0 ) THEN
+       CALL JAXDUMP_FLD(stage,'seaiceMassC','C',seaiceMassC,1,
+     &                  bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'seaiceMassU','W',seaiceMassU,1,
+     &                  bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'seaiceMassV','S',seaiceMassV,1,
+     &                  bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'TAUX','W',TAUX,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'TAUY','S',TAUY,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'FORCEX0','W',FORCEX0,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'FORCEY0','S',FORCEY0,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'PRESS0','C',PRESS0,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'ZMAX','C',ZMAX,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'ZMIN','C',ZMIN,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'tensileStrFac','C',tensileStrFac,1,
+     &                  bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'seaiceMaskU','W',seaiceMaskU,1,
+     &                  bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'seaiceMaskV','S',seaiceMaskV,1,
+     &                  bi0,bj0,myIter,myThid)
+#ifdef SEAICE_ALLOW_FREEDRIFT
+       CALL JAXDUMP_FLD(stage,'uice_fd','W',uice_fd,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'vice_fd','S',vice_fd,1,bi0,bj0,myIter,
+     &                  myThid)
+#endif
+      ENDIF
+      IF ( INDEX(groups,'v') .GT. 0 ) THEN
+       CALL JAXDUMP_FLD(stage,'e11','C',e11,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'e22','C',e22,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'e12','Z',e12,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'deltaC','C',deltaC,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'ETA','C',ETA,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'etaZ','Z',etaZ,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'ZETA','C',ZETA,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'zetaZ','Z',zetaZ,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'PRESS','C',PRESS,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'DWATN','C',DWATN,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'FORCEX','W',FORCEX,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'FORCEY','S',FORCEY,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'uIceNm1','W',uIceNm1,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'vIceNm1','S',vIceNm1,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'stressDivergenceX','W',
+     &                  stressDivergenceX,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'stressDivergenceY','S',
+     &                  stressDivergenceY,1,bi0,bj0,myIter,myThid)
+      ENDIF
+      IF ( INDEX(groups,'I') .GT. 0 ) THEN
+       CALL JAXDUMP_FLD(stage,'HEFFM','C',HEFFM,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'k1AtC','C',k1AtC,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'k1AtZ','Z',k1AtZ,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'k2AtC','C',k2AtC,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'k2AtZ','Z',k2AtZ,1,bi0,bj0,myIter,
+     &                  myThid)
+      ENDIF
+#endif /* SEAICE_CGRID */
+      IF ( INDEX(groups,'h') .GT. 0 ) THEN
+       CALL JAXDUMP_FLD(stage,'d_HEFFbyNEG','C',d_HEFFbyNEG,1,
+     &                  bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'d_HSNWbyNEG','C',d_HSNWbyNEG,1,
+     &                  bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'saltWtrIce','C',saltWtrIce,1,
+     &                  bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'frWtrIce','C',frWtrIce,1,
+     &                  bi0,bj0,myIter,myThid)
+      ENDIF
+      RETURN
+      END
+#endif /* ALLOW_SEAICE */
+
+#ifdef ALLOW_EXF
+C---------------------------------------------------------------------------------------------------------------------
+C     EXF groups b e (M2; bulk-formulae fields exist only with ALLOW_ATM_TEMP: the flux-forced tree dumps nothing).
+      SUBROUTINE JAXDUMP_EXFB( stage, groups, bi0, bj0, myIter,
+     &                         myThid )
+      IMPLICIT NONE
+#include "SIZE.h"
+#include "EEPARAMS.h"
+#include "PARAMS.h"
+#include "EXF_PARAM.h"
+#include "EXF_FIELDS.h"
+      CHARACTER*(*) stage, groups
+      INTEGER bi0, bj0, myIter, myThid
+#ifdef ALLOW_ATM_TEMP
+
+      IF ( INDEX(groups,'b') .GT. 0 ) THEN
+       CALL JAXDUMP_FLD(stage,'uwind','C',uwind,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'vwind','C',vwind,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'wspeed','C',wspeed,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'wStress','C',wStress,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'cw','C',cw,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'sw','C',sw,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'sh','C',sh,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'atemp','C',atemp,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'aqh','C',aqh,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'hs','C',hs,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'hl','C',hl,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'lwflux','C',lwflux,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'evap','C',evap,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'precip','C',precip,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'snowprecip','C',snowprecip,1,bi0,bj0,
+     &                  myIter,myThid)
+# ifdef ALLOW_DOWNWARD_RADIATION
+       CALL JAXDUMP_FLD(stage,'swdown','C',swdown,1,bi0,bj0,myIter,
+     &                  myThid)
+       CALL JAXDUMP_FLD(stage,'lwdown','C',lwdown,1,bi0,bj0,myIter,
+     &                  myThid)
+#  ifdef ALLOW_ZENITHANGLE
+       CALL JAXDUMP_FLD(stage,'zen_albedo','C',zen_albedo,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'zen_fsol_diurnal','C',zen_fsol_diurnal,
+     &                  1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'zen_fsol_daily','C',zen_fsol_daily,1,
+     &                  bi0,bj0,myIter,myThid)
+#  endif
+# endif
+# ifdef ALLOW_RUNOFF
+       CALL JAXDUMP_FLD(stage,'runoff','C',runoff,1,bi0,bj0,myIter,
+     &                  myThid)
+# endif
+      ENDIF
+
+      IF ( INDEX(groups,'e') .GT. 0 ) THEN
+       CALL JAXDUMP_FLD(stage,'ustress0','C',ustress0,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'ustress1','C',ustress1,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'vstress0','C',vstress0,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'vstress1','C',vstress1,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'wspeed0','C',wspeed0,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'wspeed1','C',wspeed1,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'atemp0','C',atemp0,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'atemp1','C',atemp1,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'aqh0','C',aqh0,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'aqh1','C',aqh1,1,bi0,bj0,myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'precip0','C',precip0,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'precip1','C',precip1,1,bi0,bj0,
+     &                  myIter,myThid)
+# ifdef ALLOW_DOWNWARD_RADIATION
+       CALL JAXDUMP_FLD(stage,'swdown0','C',swdown0,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'swdown1','C',swdown1,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'lwdown0','C',lwdown0,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'lwdown1','C',lwdown1,1,bi0,bj0,
+     &                  myIter,myThid)
+# endif
+# ifdef ATMOSPHERIC_LOADING
+       CALL JAXDUMP_FLD(stage,'apressure0','C',apressure0,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'apressure1','C',apressure1,1,bi0,bj0,
+     &                  myIter,myThid)
+# endif
+# ifdef ALLOW_RUNOFF
+       CALL JAXDUMP_FLD(stage,'runoff0','C',runoff0,1,bi0,bj0,
+     &                  myIter,myThid)
+       CALL JAXDUMP_FLD(stage,'runoff1','C',runoff1,1,bi0,bj0,
+     &                  myIter,myThid)
+# endif
+      ENDIF
+#endif /* ALLOW_ATM_TEMP */
+      RETURN
+      END
+#endif /* ALLOW_EXF */
 
 C---------------------------------------------------------------------------------------------------------------------
 C     Geometry (G), packed vertical grid (V) and extra r* fields (R). Called from JAXDUMP_STATE (already active).

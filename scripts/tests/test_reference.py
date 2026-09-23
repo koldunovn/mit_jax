@@ -7,6 +7,7 @@ means the reference is broken, not that the test does not apply).
 import json
 from pathlib import Path
 
+from mitgcm_jax.io.mds import read_mds
 from mitgcm_jax.io.monitor import compare_monitors, read_monitor
 
 REPO = Path(__file__).resolve().parents[2]
@@ -30,7 +31,8 @@ def _same_bytes(a, b, it):
 
 
 def test_jaxdump_is_invisible_to_the_model():
-    """Instrumented build, dumps off AND on, writes exactly what the plain build writes (plan Task 5)."""
+    """Instrumented build, dumps off AND on, writes exactly what the plain build writes (plan Task 5). Full tree with
+    the M2 stages (EXF bulk + sea ice, plan M2.0): also the ocean, sea-ice and GGL90 pickups, 2 steps."""
     plain = run("smoke_ff_serial13")
     for name in ("smoke_ff_serial13_jaxdump_off", "smoke_ff_serial13_jaxdump_on"):
         other = run(name)
@@ -38,6 +40,14 @@ def test_jaxdump_is_invisible_to_the_model():
         a, b = read_monitor(plain / "STDOUT.0000"), read_monitor(other / "STDOUT.0000")
         assert a == b, f"{name}: %MON differs"
     assert any((run("smoke_ff_serial13_jaxdump_on") / "jaxdump").glob("jd_0000000002_t*.bin"))
+    plain = run("smoke_full_v5_plain")
+    for name in ("smoke_full_v5_jaxdump_off", "smoke_full_v5_jaxdump_on"):
+        other = run(name)
+        assert all(_same_bytes(plain, other, 3).values()), name
+        for pk in ("pickup", "pickup_seaice", "pickup_ggl90"):
+            assert (plain / f"{pk}.ckptA.data").read_bytes() == (other / f"{pk}.ckptA.data").read_bytes(), (name, pk)
+        assert read_monitor(plain / "STDOUT.0000") == read_monitor(other / "STDOUT.0000"), f"{name}: %MON differs"
+    assert any((run("smoke_full_v5_jaxdump_on") / "jaxdump").glob("jd_0000000002_t*.bin"))
 
 
 def test_tile_layout_spread_is_small_and_recorded():
@@ -93,3 +103,203 @@ def test_full_stage1_twin_and_podaac_snapshot():
     assert set(rows) >= {"T", "S", "Eta"}, rows
     for name, r in rows.items():
         assert r["max_abs"] < 1e-3 and r["rms"] < 1e-6 and r["dry_nonzero_model"] == 0, (name, r)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# M2.0: full-tree dump oracle (EXF bulk + sea-ice stages, reference/jaxdump/SUBSTEPS.md). One tier-1 test (budget).
+
+ICE = ("AREA", "HEFF", "HSNOW", "TICES", "UICE", "VICE")
+PICKUP_SEAICE = {"siTICE": "TICES", "siAREA": "AREA", "siHEFF": "HEFF", "siHSNOW": "HSNOW", "siUICE": "UICE",
+                 "siVICE": "VICE"}
+M1_FILES = {"do_oceanic_phys.F", "dynamics.F", "forward_step.F", "salt_integrate.F", "solve_for_pressure.F",
+            "temp_integrate.F", "thermodynamics.F"}
+M2_FILES = {"exf_getforcing.F", "exf_radiation.F", "exf_bulkformulae.F", "seaice_model.F", "seaice_dynsolver.F",
+            "seaice_lsr.F", "seaice_advdiff.F", "seaice_growth.F"}
+
+
+def _instrument():
+    import importlib.util
+
+    path = REPO / "reference" / "jaxdump" / "instrument.py"
+    spec = importlib.util.spec_from_file_location("jaxdump_instrument", path)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def _dumpset_parallel(directory):
+    """mitgcm_jax.io.dump.DumpSet of `directory` with the record headers of all files read in parallel threads: the
+    serial index of a full-tree oracle takes ~110 s on cold Lustre (~3 ms per record header, ~50k headers), ~3 s this
+    way. Same index as DumpSet(directory) (tile-file order within one iteration does not matter for the lookups).
+    Also asserts that no (iteration, stage, field, tile) was written twice (DumpSet would keep only the last one: a
+    stage inside a loop needs its '_p<n>' suffix)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from mitgcm_jax.io.dump import DumpSet, read_file
+
+    files = sorted(Path(directory).glob("jd_*_t*.bin"))
+    assert files, directory
+    with ThreadPoolExecutor(min(len(files), 64)) as ex:
+        per_file = list(ex.map(lambda f: read_file(f, lazy=True), files))
+    ds = DumpSet.__new__(DumpSet)
+    ds.dir, ds.index = Path(directory), {}
+    dup = []
+    for recs in per_file:
+        for r in recs:
+            slot = ds.index.setdefault((r.iter, r.stage, r.field), {})
+            if r.tile in slot:
+                dup.append((r.iter, r.stage, r.field, r.tile))
+            slot[r.tile] = r
+    assert not dup, dup[:5]
+    ds.order = list(ds.index)
+    return ds
+
+
+def _mon_close(x, ref):
+    """%MON prints 14 significant digits (1PE22.13): equal to that precision."""
+    return x == ref if ref == 0 else abs(x - ref) <= 1e-13 * abs(ref)
+
+
+def _check_instrument(ins, tmp):
+    """The flux-forced tree gets only the M1 files (M2 stages are full-tree only, so its instrumentation is unchanged),
+    the full tree the EXF/sea-ice files too; every anchor resolves (a drifted source fails loudly) and every generated
+    line fits fixed-form 72 columns (the first M2 build failed on that)."""
+    for tree, files in (("ff", M1_FILES), ("full", M1_FILES | M2_FILES)):
+        ins.instrument(tree, tmp / tree)
+        assert {q.name for q in (tmp / tree).iterdir()} == files | {"jaxdump.F", "JAXDUMP.h"}, tree
+        for f in files:
+            lines = (tmp / tree / f).read_text().split("\n")
+            for i, ln in enumerate(lines):
+                if "CALL JAXDUMP_" not in ln:
+                    continue
+                j = i
+                while True:
+                    assert len(lines[j]) <= 72, (tree, f, j + 1, lines[j])
+                    j += 1
+                    if not lines[j].startswith("     &"):
+                        break
+
+
+def _check_stages(ins, ds):
+    """Every full-tree stage (M1 + M2) at iterations 1-3 on all 13 tiles (the packed vertical grid: tile 1), the LSR
+    Picard-loop stages once per pass (_p1, _p2; SEAICEnonLinIterMax=2), and nothing else."""
+    expect = set()
+    for e in ins.entries("full"):
+        stage, opts = e[4], e[8]
+        expect |= {f"{stage}_p1", f"{stage}_p2"} if "loop" in opts else {stage}
+    assert "L02_lsr_coeffs_p2" in expect and "H04_growth_solve4temp" in expect and "X05b_bulk_iter" in expect
+    for it in (1, 2, 3):
+        have = {st for (i, st, _f) in ds.index if i == it}
+        assert have == expect, (it, sorted(expect - have), sorted(have - expect))
+    bad = [k for k, recs in ds.index.items()
+           if sorted(recs) != ([1] if k[1:] == ("G00_geometry", "vertical") else list(range(1, 14)))]
+    assert not bad, bad[:5]  # the packed vertical grid is a tile-1 record by design
+    assert sorted({k[0] for k in ds.index}) == [1, 2, 3]
+
+
+def _check_monitor_vs_plain(p):
+    """%MON of the 3 dumped steps = the plain full serial13 build's 1-day run, bitwise (its block 4 also holds step 4's
+    EXF and cg2d lines)."""
+    a, b = read_monitor(p / "STDOUT.0000"), read_monitor(run("ref_full_serial13_1day") / "STDOUT.0000")
+    assert sorted(a) == [1, 2, 3, 4]
+    for it in (1, 2, 3, 4):
+        extra = set(b[it]) - set(a[it])
+        assert set(a[it]) <= set(b[it]), it
+        assert not extra if it < 4 else all(k.startswith(("exf_", "cg2d_")) for k in extra), (it, sorted(extra))
+        assert {k: a[it][k] for k in a[it]} == {k: b[it][k] for k in a[it]}, it
+    assert any(k.startswith("seaice_") for k in a[2]) and any(k.startswith("exf_") for k in a[2])
+
+
+def _check_ice_state(oracle, ds, p):
+    """Sea-ice state vs what the model reads and writes, bitwise: start of step 1 = input pickup_seaice.0000000001,
+    end of step n (after SEAICE_MODEL, P00) = start of step n+1 (S00i, halos included), end of step 3 = the
+    pickup_seaice.ckptA written at iteration 4. Negative control: step 1 vs step 3 differ."""
+    import numpy as np
+
+    for n in (1, 2):
+        for f in ICE:
+            a, b = oracle.field(ds, n, "P00_seaice_model", f), oracle.field(ds, n + 1, "S00i_begin_ice_exf", f)
+            assert np.array_equal(a, b), (n, f)
+    assert not np.array_equal(oracle.field(ds, 1, "S00i_begin_ice_exf", "HEFF"),
+                              oracle.field(ds, 3, "S00i_begin_ice_exf", "HEFF"))
+    for fname, it, stage in (("pickup_seaice.0000000001", 1, "S00i_begin_ice_exf"),
+                             ("pickup_seaice.ckptA", 3, "P00_seaice_model")):
+        arr, meta = read_mds(p / fname)
+        for r, fl in enumerate(meta["fldList"]):
+            got = ds.compact(it, stage, PICKUP_SEAICE[fl])[0]
+            assert np.array_equal(got, arr[r]), (fname, fl, float(np.max(np.abs(got - arr[r]))))
+
+
+def _check_monitor_stats(oracle, ds, p):
+    """Max/min over the monitor's points (maskIn*, interior) of the dumped fields reproduce the model's %MON:
+    seaice_* at tsnumber n = S00i of step n (n=4: P00 of step 3); exf_* of step n = X06 (b group) / X07 (x group) of
+    step n, except hflux from X08: EXF_MONITOR runs inside EXF_GETFORCING after hflux += swflux (SHORTWAVE_HEATING) and
+    before EXF_MAPFIELDS, which clips ustress/vstress in place at windstressmax (2 N/m2; seen as a max of exactly 2.0).
+    Negative control: another step's EXF fields mostly do not match."""
+    mon = read_monitor(p / "STDOUT.0000")
+    mask = {k: oracle.field(ds, 1, "G00_geometry", f"maskIn{k}")[:, 4:-4, 4:-4] > 0 for k in "CWS"}
+
+    def stats(it, stage, name, m):
+        v = oracle.field(ds, it, stage, name)
+        v = (v[:, 0] if v.ndim == 4 else v)[:, 4:-4, 4:-4][mask[m]]
+        return float(v.max()), float(v.min())
+
+    for n in (1, 2, 3, 4):
+        it, stage = (n, "S00i_begin_ice_exf") if n < 4 else (3, "P00_seaice_model")
+        for f, mn, m in (("AREA", "area", "C"), ("HEFF", "heff", "C"), ("HSNOW", "hsnow", "C"), ("UICE", "uice", "W"),
+                         ("VICE", "vice", "S")):
+            mx_, mi_ = stats(it, stage, f, m)
+            assert _mon_close(mx_, mon[n][f"seaice_{mn}_max"]) and _mon_close(mi_, mon[n][f"seaice_{mn}_min"]), (n, f)
+    exf = (("X07_exf_getsurfacefluxes", ("ustress", "vstress", "sflux", "swflux", "apressure")),
+           ("X08_exf_mapfields", ("hflux",)),
+           ("X06_exf_hflux_sflux", ("wspeed", "atemp", "aqh", "lwflux", "evap", "precip", "swdown", "lwdown",
+                                    "runoff")))
+    wrong = 0
+    for n in (1, 2, 3):
+        for stage, names in exf:
+            for f in names:
+                mx_, mi_ = stats(n, stage, f, "C")
+                assert _mon_close(mx_, mon[n][f"exf_{f}_max"]) and _mon_close(mi_, mon[n][f"exf_{f}_min"]), (n, f)
+                o = stats(3 if n < 3 else 1, stage, f, "C")
+                wrong += not (_mon_close(o[0], mon[n][f"exf_{f}_max"]) and _mon_close(o[1], mon[n][f"exf_{f}_min"]))
+    return wrong
+
+
+def _check_exf(oracle, ds):
+    """X08 (after EXF_MAPFIELDS) = the M1 stage S02 (after LOAD_FIELDS_DRIVER) bitwise; hflux/sflux at X06 = the
+    EXF_GETFORCING formula (-hs - hl + lwflux; evap - precip - runoff; times maskC k=1; SHORTWAVE_HEATING) from the
+    dumped terms, exactly. Negative control: a flipped sign of hs does not match."""
+    import numpy as np
+
+    interior = (slice(None), slice(4, -4), slice(4, -4))
+    mC = oracle.field(ds, 1, "G00_geometry", "maskC")[:, 0][interior]
+    for it in (1, 2, 3):
+        for f in ("ustress", "vstress", "hflux", "sflux", "fu", "fv", "Qnet", "Qsw", "EmPmR", "saltFlux", "pLoad"):
+            assert np.array_equal(oracle.field(ds, it, "X08_exf_mapfields", f),
+                                  oracle.field(ds, it, "S02_load_fields", f)), (it, f)
+        g = {f: oracle.field(ds, it, "X06_exf_hflux_sflux", f)[interior]
+             for f in ("hs", "hl", "lwflux", "evap", "precip", "runoff", "hflux", "sflux")}
+        assert np.array_equal((-g["hs"] - g["hl"] + g["lwflux"]) * mC, g["hflux"]), it
+        assert np.array_equal(((g["evap"] - g["precip"]) - g["runoff"]) * mC, g["sflux"]), it
+        assert not np.array_equal((g["hs"] - g["hl"] + g["lwflux"]) * mC, g["hflux"]), it
+
+
+def test_full_oracle_m2_stages_and_consistency(tmp_path):
+    """Full-tree dump oracle full_jaxdump_v5 (plan M2.0): the instrumentation is tree-scoped and fixed-form clean; the
+    oracle has every stage at iterations 1-3; its %MON equals the plain build's; its sea-ice dumps equal the pickups the
+    model reads/writes and chain bitwise across steps; dumped ice/EXF fields reproduce the model's own %MON max/min;
+    EXF stages agree with each other and with the hflux/sflux formula. Recorded 2026-09-23: 60648 records (4668 keys),
+    12.5 GB per iteration (M2 stages 0.78 GB); LSOR sweeps (ICOUNT1 = ICOUNT2) per Picard pass 178/118, 112/82, 84/58 at
+    iterations 1/2/3; 16 s on a compute node."""
+    from mitgcm_jax.tests import oracle
+
+    p = run(oracle.FULL)
+    ins = _instrument()
+    _check_instrument(ins, tmp_path)
+    ds = _dumpset_parallel(p / "jaxdump")
+    _check_stages(ins, ds)
+    _check_monitor_vs_plain(p)
+    _check_ice_state(oracle, ds, p)
+    wrong = _check_monitor_stats(oracle, ds, p)
+    assert wrong >= 40, wrong  # negative control: of 45 EXF max/min checks, 45 fail on another step (2026-09-23)
+    _check_exf(oracle, ds)

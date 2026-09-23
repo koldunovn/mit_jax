@@ -22,5 +22,9 @@
   "ref_full_serial13_1day": "ref_full_serial13_1day",
   "ref_full_jaxdump_v4": "ref_full_serial13_jaxdump_3steps",
   "ref_ff_mpi96_1month": "ref_ff_mpi96_1month",
-  "twin_ff_nogeo_serial13_1month": "twin_ff_serial13_nogeo_1month"
+  "twin_ff_nogeo_serial13_1month": "twin_ff_serial13_nogeo_1month",
+  "smoke_full_v5_plain": "smoke_full_v5_plain_2steps",
+  "smoke_full_v5_jaxdump_off": "smoke_full_v5_jd_off_2steps",
+  "smoke_full_v5_jaxdump_on": "smoke_full_v5_jd_on_2steps",
+  "full_jaxdump_v5": "ref_full_serial13_jaxdump_v5_3steps"
 }

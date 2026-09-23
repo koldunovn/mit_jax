@@ -38,7 +38,7 @@ MANIFEST = {
     "mitgcm_jax/tests/test_sharded_step.py": "tier1x",
     "mitgcm_jax/tests/test_step_fluxforced.py": "tier1",
     "mitgcm_jax/tests/test_grid.py": "tier1",
-    "mitgcm_jax/tests/test_monitor_stats.py": "tier1",
+    "mitgcm_jax/tests/test_monitor_stats.py": "tier1x",
     "mitgcm_jax/tests/test_exf_fluxforced.py": "tier1",
     "mitgcm_jax/tests/test_grid_load.py": "tier1",
     "mitgcm_jax/tests/test_phi_hyd.py": "tier1x",

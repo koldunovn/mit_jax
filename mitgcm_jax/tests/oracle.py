@@ -30,6 +30,7 @@ def dumpset(name):
 #   FORCED 3 steps, useEXF=T (flux-forced 1992 forcing), useCTRL=F, geothermalFile=' ', dumps at iterations 1, 2, 3
 SMOKE = "smoke_ff_jaxdump_v3"
 FORCED = "forced_ff_jaxdump_v3"
+FULL = "full_jaxdump_v5"  # full V4r4 (EXF bulk + sea ice), 3 steps, dumps 1-3 incl. the M2 stages (SUBSTEPS.md)
 
 
 def field(ds, it, stage, name, layout=None):

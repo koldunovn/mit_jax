@@ -9,16 +9,80 @@ every tile; `tile` = the current `bi,bj` inside a tile loop (`DO_OCEANIC_PHYS`, 
 step's START iteration (`forward_step.F:823` advances `myIter` after `DYNAMICS`; stages after it, including those inside
 `SOLVE_FOR_PRESSURE` and `THERMODYNAMICS`, pass `myIter-1`).
 
+**M2 stages (full tree only; `—` in the ff column).** EXF bulk forcing (`X*`, inside `EXF_GETFORCING` called from
+`LOAD_FIELDS_DRIVER`, i.e. between `S01` and `S02`) and sea ice (`I*`/`Y*`/`L*`/`A*`/`H*`, inside `SEAICE_MODEL` called
+from `DO_OCEANIC_PHYS` before `EXTERNAL_FORCING_SURF`; `P00` = after `SEAICE_MODEL`). The flux-forced build gets no
+copies of these files and its instrumentation is byte-identical to before. Extra dump kinds:
+`U:<name>:<kind>:<nz>` → an interior-only routine-local array `(1:sNx,1:sNy,nz)` of the current tile
+(`JAXDUMP_TILEI`; halo points written as 0), `N:<name>` → a scalar (iteration count, convergence measure) as a constant
+field on every tile, kind `N` (`JAXDUMP_SCALAR`; read `oracle.field(ds, it, stage, name)[0, 0, 0]`). Anchors
+`ENDDO<n>:<re>` dump after the ENDDO closing the n-th DO loop around the matched line. Stages inside the LSR Picard
+loop (`L01`–`L04`, "per `ipass`") are written once per pass with the stage name suffixed `_p1`, `_p2`
+(`L01_lsr_visc_drag_p1`, ...); `if <cond>` stages dump only when the Fortran condition holds (`L03`: first LSOR sweep
+only; `H03`/`H04`: once, all ice categories). Group letters (`jaxdump.F`, `JAXDUMP_SEAICE` / `JAXDUMP_EXFB`):
+`i` AREA, HEFF, HSNOW, TICES (nITD=7 levels; only level 1 is used, SEAICE_multDim=1); `u` UICE, VICE; `y` ice masses,
+TAUX/TAUY, FORCEX0/Y0, PRESS0, ZMAX, ZMIN, tensileStrFac, seaiceMaskU/V, uice_fd/vice_fd; `v` e11, e22, e12, deltaC,
+ETA, etaZ, ZETA, zetaZ, PRESS, DWATN, FORCEX/Y, uIceNm1/vIceNm1, stressDivergenceX/Y; `h` d_HEFFbyNEG, d_HSNWbyNEG,
+saltWtrIce, frWtrIce; `I` HEFFM, k1AtC/Z, k2AtC/Z; `b` uwind, vwind, wspeed, wStress, cw, sw, sh, atemp, aqh, hs, hl,
+lwflux, evap, precip, snowprecip, swdown, lwdown, zen_albedo, zen_fsol_diurnal/daily, runoff; `e` the bracketing
+records `<f>0`, `<f>1` of ustress, vstress, wspeed, atemp, aqh, precip, swdown, lwdown, apressure, runoff (inputs of
+the time interpolation). EXF `x` (ustress, vstress, hflux, swflux, sflux, saltflx, apressure) and `f`
+(surfaceForcing*, fu, fv, Qnet, Qsw, EmPmR, saltFlux, pLoad, phi0surf, sIceLoad) as in M1.
+
 Run with `JAXDUMP_DIR=<dir> JAXDUMP_STEPS=1:2:3` (`:` or `,`; `,` does not survive `sbatch --export`); read with
-`mitgcm_jax.io.dump.DumpSet`; compare with `tools/diffdump.py`. About 9.5 GB per dumped iteration (27 stages, 13 tiles, halos included).
+`mitgcm_jax.io.dump.DumpSet`; compare with `tools/diffdump.py`. Size per dumped iteration (13 tiles, halos included):
+about 9.5 GB for the flux-forced tree (measured with 27 M1 stages); 12.5 GB for the full tree, of which the M2 stages
+are 0.78 GB (oracle `full_jaxdump_v5`, 20216 records per iteration). Indexing a full-tree dump directory serially takes
+~110 s on cold Lustre (~3 ms per record header); reading the per-file headers in parallel threads takes a few seconds
+(`scripts/tests/test_reference.py::_dumpset_parallel`).
 
 | stage | file (full / ff source) : line of anchor | scope | dumps | what |
 |---|---|---|---|---|
 | `S00_begin` | code/forward_step.F:392 / flux-forced/code/forward_step.F:392 | all | S:dtarfmkgpxc | state at the start of the step |
 | `G00_geometry` | code/forward_step.F:392 / flux-forced/code/forward_step.F:392 | all | S:GVRX | grid, masks, 3-D mixing parameters, packed vertical grid, extra r* fields, exch2 exchange probe |
+| `G01_seaice_geometry` | code/forward_step.F:392 / — | all | S:I | sea-ice static fields: HEFFM, k1/k2 metric terms (full tree) |
+| `S00i_begin_ice_exf` | code/forward_step.F:392 / — | all | S:iube | sea-ice state and EXF fields (interpolated + bracketing records) at the start of the step (full tree) |
 | `S01_update_rstar_F` | code/forward_step.F:430 / flux-forced/code/forward_step.F:430 | all | S:rd | RESET_NLFS_VARS + UPDATE_R_STAR(.FALSE.) (every step: ALLOW_AUTODIFF) |
+| `X01_exf_getffields` | MITgcm_c66g/pkg/exf/exf_getforcing.F:161 / — | all | S:bex | EXF_GETFFIELDS: read, time-interpolate, rotate (A-grid stress) the forcing records |
+| `X02_exf_zenithangle` | MITgcm_c66g/pkg/exf/exf_radiation.F:142 / — | all | S:b | EXF_ZENITHANGLE inside EXF_RADIATION: zen_fsol_*, swdown rescaled (useExfZenIncoming) |
+| `X03_exf_radiation` | MITgcm_c66g/pkg/exf/exf_getforcing.F:176 / — | all | S:bx | EXF_RADIATION: lwflux (emissivity, SST^4), swflux |
+| `X04_exf_wind` | MITgcm_c66g/pkg/exf/exf_getforcing.F:187 / — | all | S:b | EXF_WIND: wStress, cw, sw, sh, uwind/vwind from the stress (useAtmWind=F) |
+| `X05a_bulk_init` | before MITgcm_c66g/pkg/exf/exf_bulkformulae.F:356 / — | tile | U:tstar:C:1, U:qstar:C:1, U:ustar:C:1, U:rdn:C:1, U:delq:C:1, U:deltap:C:1 | EXF_BULKFORMULAE: neutral first guess before the stability iterations |
+| `X05b_bulk_iter` | after the ENDDO of loop level 1 around MITgcm_c66g/pkg/exf/exf_bulkformulae.F:356 / — | tile | U:tstar:C:1, U:qstar:C:1, U:ustar:C:1, U:tau:C:1, U:rdn:C:1, U:rd:C:1 | EXF_BULKFORMULAE: turbulent scales after the niter_bulk stability iterations (where atemp=0 the locals are never set: values there are undefined) |
+| `X05_exf_bulkformulae` | MITgcm_c66g/pkg/exf/exf_getforcing.F:199 / — | all | S:b | EXF_BULKFORMULAE (Large-Yeager 2004): hs, hl, evap |
+| `X06_exf_hflux_sflux` | before MITgcm_c66g/pkg/exf/exf_getforcing.F:260 / — | all | S:bx | hflux, sflux (net, runoff, masked) and the stress exchange (EXCH_UV_AGRID_3D_RL) |
+| `X07_exf_getsurfacefluxes` | MITgcm_c66g/pkg/exf/exf_getforcing.F:260 / — | all | S:x | EXF_GETSURFACEFLUXES (control adjustments) |
+| `X08_exf_mapfields` | MITgcm_c66g/pkg/exf/exf_getforcing.F:299 / — | all | S:xf | EXF_MAPFIELDS: fu, fv, Qnet, Qsw, EmPmR, saltFlux, pLoad |
 | `S02_load_fields` | code/forward_step.F:495 / flux-forced/code/forward_step.F:495 | all | S:xfp | EXF read, time interpolation, map |
 | `S03_ctrl_map_forcing` | code/forward_step.F:528 / flux-forced/code/forward_step.F:528 | all | S:xf | time-varying controls (zero) |
+| `I00_seaice_begin` | before MITgcm_c66g/pkg/seaice/seaice_model.F:148 / — | all | S:iub | SEAICE_MODEL inputs (uwind/vwind after EXCH_UV_AGRID_3D_RL) |
+| `Y01_get_dynforcing` | MITgcm_c66g/pkg/seaice/seaice_dynsolver.F:198 / — | all | S:y | ice masses, TAUX/TAUY from fu/fv (SEAICE_EXTERNAL_FLUXES, useAtmWind=F) |
+| `Y02_ice_strength` | MITgcm_c66g/pkg/seaice/seaice_dynsolver.F:265 / — | tile | S:y | FORCEX0/Y0 and SEAICE_CALC_ICE_STRENGTH: PRESS0, ZMAX, ZMIN |
+| `Y03_freedrift` | MITgcm_c66g/pkg/seaice/seaice_dynsolver.F:276 / — | all | S:y | SEAICE_FREEDRIFT (LSR_mixIniGuess=0): uice_fd, vice_fd |
+| `Y04_before_lsr` | before MITgcm_c66g/pkg/seaice/seaice_dynsolver.F:315 / — | all | S:iuyv | all inputs of SEAICE_LSR |
+| `L01_lsr_visc_drag` | MITgcm_c66g/pkg/seaice/seaice_lsr.F:332 / — | all, per `ipass` (stage `_p<n>`) | S:uv, G:uIceC:W:1, G:vIceC:S:1 | Picard pass p: uIce/uIceNm1 update, strain rates, viscosities, pressure, ocean drag DWATN |
+| `L02_lsr_coeffs` | MITgcm_c66g/pkg/seaice/seaice_lsr.F:468 / — | all, per `ipass` (stage `_p<n>`) | S:v, G:etaPlusZeta:C:1, G:zetaMinusEta:C:1, G:dragSym:C:1, G:rhsU:W:1, G:rhsV:S:1, G:AU:W:1, G:BU:W:1, G:CU:W:1, G:uRt1:W:1, G:uRt2:W:1, G:AV:S:1, G:BV:S:1, G:CV:S:1, G:vRt1:S:1, G:vRt2:S:1 | Picard pass p: FORCEX/Y, rhsU/V (SEAICE_LSR_RHSU/V), tridiagonal coefficients (SEAICE_LSR_CALC_COEFFS) |
+| `L03_lsor_sweep1` | MITgcm_c66g/pkg/seaice/seaice_lsr.F:832 / — | all, per `ipass` (stage `_p<n>`), if `m.EQ.1` | S:u | Picard pass p: uIce, vIce after the FIRST LSOR sweep (TRIDIAGU/V, relaxation) and its exchange |
+| `L04_lsor_end` | after the ENDDO of loop level 1 around MITgcm_c66g/pkg/seaice/seaice_lsr.F:641 / — | all, per `ipass` (stage `_p<n>`) | S:u, N:ICOUNT1, N:ICOUNT2, N:S1, N:S2, N:WFAU, N:WFAV | Picard pass p: uIce, vIce after the LSOR loop (before masking); iteration counts ICOUNT1/2, last dU/dV S1/S2, relaxation WFAU/V |
+| `Y05_lsr` | MITgcm_c66g/pkg/seaice/seaice_dynsolver.F:315 / — | all | S:uv | SEAICE_LSR result (masked uIce, vIce) |
+| `Y06_ocean_stress` | MITgcm_c66g/pkg/seaice/seaice_dynsolver.F:361 / — | all | S:f | SEAICE_OCEAN_STRESS: fu, fv under ice (+ EXCH_UV_XY_RS) |
+| `I01_dynsolver` | MITgcm_c66g/pkg/seaice/seaice_model.F:148 / — | all | S:uyvf | SEAICE_DYNSOLVER incl. velocity clipping (SEAICE_clipVelocities) |
+| `A01_heff_adv` | MITgcm_c66g/pkg/seaice/seaice_advdiff.F:222 / — | tile | T:uTrans:W:1, T:vTrans:S:1, T:gFld:C:1, T:afx:W:1, T:afy:S:1 | HEFF: DST3-FL advective tendency gFld and fluxes afx/afy (SEAICE_ADVECTION, scheme 33) |
+| `A02_heff_diff` | MITgcm_c66g/pkg/seaice/seaice_advdiff.F:230 / — | tile | T:gFld:C:1 | HEFF: tendency after SEAICE_DIFFUSION (Laplacian, SEAICEdiffKhHeff) |
+| `A03_area_adv` | MITgcm_c66g/pkg/seaice/seaice_advdiff.F:265 / — | tile | T:gFld:C:1, T:afx:W:1, T:afy:S:1 | AREA: advective tendency (after the HEFF update) |
+| `A04_area_diff` | MITgcm_c66g/pkg/seaice/seaice_advdiff.F:273 / — | tile | T:gFld:C:1 | AREA: + diffusion |
+| `A05_snow_adv` | MITgcm_c66g/pkg/seaice/seaice_advdiff.F:332 / — | tile | T:gFld:C:1, T:afx:W:1, T:afy:S:1 | HSNOW: advective tendency |
+| `A06_snow_diff` | MITgcm_c66g/pkg/seaice/seaice_advdiff.F:340 / — | tile | T:gFld:C:1 | HSNOW: + diffusion |
+| `I02_advdiff` | MITgcm_c66g/pkg/seaice/seaice_model.F:184 / — | all | S:iu | SEAICE_ADVDIFF: HEFF, AREA, HSNOW |
+| `I03_reg_ridge` | MITgcm_c66g/pkg/seaice/seaice_model.F:194 / — | all | S:ih | SEAICE_REG_RIDGE: negative-value and area regularisation, d_HEFFbyNEG, d_HSNWbyNEG |
+| `H01_growth_pre_budget` | before code/seaice_growth.F:747 / — | tile | U:HEFFpreTH:C:1, U:HSNWpreTH:C:1, U:AREApreTH:C:1, U:heffActual:C:1, U:hsnowActual:C:1, U:recip_heffActual:C:1, U:UG:C:1, U:TmixLoc:C:1 | SEAICE_GROWTH (V4r4): regularised thicknesses, UG, TmixLoc = inputs of SEAICE_BUDGET_OCEAN |
+| `H02_growth_budget_ocean` | code/seaice_growth.F:747 / — | tile | U:a_QbyATM_open:C:1, U:a_QSWbyATM_open:C:1 | open-water heat budget (W/m2) |
+| `H03_growth_pre_solve4temp` | before code/seaice_growth.F:833 / — | tile, if `IT.EQ.1` | U:UG:C:1, U:heffActualMult:C:nITD, U:hsnowActualMult:C:nITD, U:ticeInMult:C:nITD | inputs of SEAICE_SOLVE4TEMP (all categories) |
+| `H04_growth_solve4temp` | code/seaice_growth.F:833 / — | tile, if `IT.EQ.SEAICE_multDim` | U:ticeInMult:C:nITD, U:ticeOutMult:C:nITD, U:a_QbyATMmult_cover:C:nITD, U:a_QSWbyATMmult_cover:C:nITD, U:a_FWbySublimMult:C:nITD | SEAICE_SOLVE4TEMP: ice surface temperature, ice-covered heat and sublimation fluxes (W/m2) |
+| `H05_growth_heat_stocks` | after the ENDDO of loop level 2 around code/seaice_growth.F:1065 / — | tile | U:a_QbyATM_cover:C:1, U:a_QSWbyATM_cover:C:1, U:a_QbyATM_open:C:1, U:a_QSWbyATM_open:C:1, U:r_QbyATM_cover:C:1, U:r_QbyATM_open:C:1, U:a_FWbySublim:C:1, U:r_FWbySublim:C:1, U:a_QbyOCN:C:1, U:r_QbyOCN:C:1 | end of PART 2: heat stocks in effective ice metres (atmosphere cover/open, ocean) |
+| `H06_growth_ocean_forcing` | after the ENDDO of loop level 2 around code/seaice_growth.F:2228 / — | tile | S:ih, U:d_HEFFbyOCNonICE:C:1, U:d_HEFFbyATMonOCN:C:1, U:d_HEFFbyFLOODING:C:1, U:d_HEFFbyATMonOCN_open:C:1, U:d_HEFFbyATMonOCN_cover:C:1, U:d_HSNWbyATMonSNW:C:1, U:d_HSNWbyOCNonSNW:C:1, U:d_HSNWbyRAIN:C:1, U:d_HFRWbyRAIN:C:1, U:d_HEFFbySublim:C:1, U:d_HSNWbySublim:C:1, U:r_QbyATM_cover:C:1, U:r_QbyATM_open:C:1, U:r_FWbySublim:C:1 | PARTS 3-7 up to the Qnet/Qsw conversion to W/m2: thickness increments by process, updated HEFF/AREA/HSNOW, r_Q* residuals (Qnet/Qsw themselves: I04) |
+| `I04_growth` | MITgcm_c66g/pkg/seaice/seaice_model.F:204 / — | all | S:ihfp | SEAICE_GROWTH: thermodynamics, ocean forcing Qnet/Qsw/EmPmR/saltFlux, sIceLoad, salt-plume flux |
+| `P00_seaice_model` | MITgcm_c66g/model/src/do_oceanic_phys.F:476 / — | all | S:iufp | all of SEAICE_MODEL (after its HEFF/AREA/HSNOW/forcing exchanges) |
 | `P01_external_forcing_surf` | MITgcm_c66g/model/src/do_oceanic_phys.F:606 / flux-forced/code/do_oceanic_phys.F:612 | all | S:fp | surface forcing arrays (before the tile loop) |
 | `P02_rho_sigma_ivdc_mxlayer` | MITgcm_c66g/model/src/do_oceanic_phys.F:936 / flux-forced/code/do_oceanic_phys.F:942 | tile | S:m, T:sigmaX:W:Nr, T:sigmaY:S:Nr, T:sigmaR:C:Nr | FIND_RHO_2D, GRAD_SIGMA, CALC_IVDC (k loop), CALC_OCE_MXLAYER |
 | `P03_salt_plume_depth` | MITgcm_c66g/model/src/do_oceanic_phys.F:943 / flux-forced/code/do_oceanic_phys.F:949 | tile | S:p | salt-plume depth |
@@ -28,12 +92,12 @@ Run with `JAXDUMP_DIR=<dir> JAXDUMP_STEPS=1:2:3` (`:` or `,`; `,` does not survi
 | `S04_oceanic_phys` | code/forward_step.F:609 / flux-forced/code/forward_step.F:609 | all | S:fmkgprt | all of DO_OCEANIC_PHYS |
 | `D00a_phi_hyd` | code/dynamics.F:487 / MITgcm_c66g/model/src/dynamics.F:481 | tile | K:dPhiHydX:W, K:dPhiHydY:S, K:phiHydC:C, K:phiHydF:C | hydrostatic pressure (per level k): gradient terms dPhiHydX/Y, phiHydC, phiHydF (next interface) |
 | `D00b_mom_vecinv` | code/dynamics.F:542 / MITgcm_c66g/model/src/dynamics.F:536 | tile | K:gU:W:gU(1-OLx,1-OLy,k,bi,bj), K:gV:S:gV(1-OLx,1-OLy,k,bi,bj), K:guDissip:W, K:gvDissip:S | vector-invariant momentum tendency of level k (gU, gV) and dissipation kept out of AB (guDissip, gvDissip) |
-| `D01_before_impl_visc` | code/dynamics.F:602 / MITgcm_c66g/model/src/dynamics.F:596 | tile | S:a, T:kappaRU:W:Nr+1, T:kappaRV:S:Nr+1 | explicit gU, gV (after TIMESTEP) and vertical viscosities, input of IMPLDIFF (ALLOW_AUTODIFF path) |
+| `D01_before_impl_visc` | before code/dynamics.F:602 / MITgcm_c66g/model/src/dynamics.F:596 | tile | S:a, T:kappaRU:W:Nr+1, T:kappaRV:S:Nr+1 | explicit gU, gV (after TIMESTEP) and vertical viscosities, input of IMPLDIFF (ALLOW_AUTODIFF path) |
 | `D02_after_impl_visc` | code/dynamics.F:610 / MITgcm_c66g/model/src/dynamics.F:604 | tile | S:a | gU, gV after implicit viscosity |
 | `S05_dynamics` | code/forward_step.F:808 / flux-forced/code/forward_step.F:808 | all | S:adm | phi_hyd, momentum tendencies, AB3, implicit viscosity -> gU, gV |
 | `S06_update_rstar_T` | code/forward_step.F:855 / flux-forced/code/forward_step.F:855 | all | S:r | r* at the new time |
 | `S07_update_cg2d` | code/forward_step.F:890 / flux-forced/code/forward_step.F:890 | all | S:c | cg2d operator + preconditioner |
-| `C01_cg2d_inputs` | MITgcm_c66g/model/src/solve_for_pressure.F:304 / MITgcm_c66g/model/src/solve_for_pressure.F:304 | all | G:cg2d_b:C:1, G:cg2d_x:C:1, S:c | cg2d right-hand side, first guess and operator |
+| `C01_cg2d_inputs` | before MITgcm_c66g/model/src/solve_for_pressure.F:304 / MITgcm_c66g/model/src/solve_for_pressure.F:304 | all | G:cg2d_b:C:1, G:cg2d_x:C:1, S:c | cg2d right-hand side, first guess and operator |
 | `C02_cg2d_solution` | MITgcm_c66g/model/src/solve_for_pressure.F:304 / MITgcm_c66g/model/src/solve_for_pressure.F:304 | all | G:cg2d_x:C:1 | cg2d solution (before exchange) |
 | `S08_solve_for_pressure` | code/forward_step.F:935 / flux-forced/code/forward_step.F:935 | all | S:d | cg2d solve -> etaN |
 | `S09_momentum_correction` | code/forward_step.F:951 / flux-forced/code/forward_step.F:951 | all | S:d | u, v corrected |
@@ -42,12 +106,12 @@ Run with `JAXDUMP_DIR=<dir> JAXDUMP_STEPS=1:2:3` (`:` or `,`; `,` does not survi
 | `S12_stagger_exchanges` | code/forward_step.F:1015 / flux-forced/code/forward_step.F:1015 | all | S:d | exchanges before the staggered tracer step |
 | `T01_residual_flow` | MITgcm_c66g/model/src/thermodynamics.F:267 / MITgcm_c66g/model/src/thermodynamics.F:267 | tile | T:uFld:W:Nr, T:vFld:S:Nr, T:wFld:C:Nr | Eulerian + bolus velocity used by tracer advection |
 | `T10_temp_adv` | MITgcm_c66g/model/src/temp_integrate.F:285 / MITgcm_c66g/model/src/temp_integrate.F:285 | tile | T:gT_loc:C:Nr | theta: multi-dimensional DST3 advective tendency |
-| `T11_temp_gT` | MITgcm_c66g/model/src/temp_integrate.F:475 / MITgcm_c66g/model/src/temp_integrate.F:475 | tile | T:gT_loc:C:Nr | theta: total explicit tendency after forcing, diffusion, AB3 and r* rescale |
+| `T11_temp_gT` | before MITgcm_c66g/model/src/temp_integrate.F:475 / MITgcm_c66g/model/src/temp_integrate.F:475 | tile | T:gT_loc:C:Nr | theta: total explicit tendency after forcing, diffusion, AB3 and r* rescale |
 | `T12_temp_step` | MITgcm_c66g/model/src/temp_integrate.F:475 / MITgcm_c66g/model/src/temp_integrate.F:475 | tile | T:gT_loc:C:Nr | theta: T + dt*gT |
 | `T13_temp_impl` | MITgcm_c66g/model/src/temp_integrate.F:494 / MITgcm_c66g/model/src/temp_integrate.F:494 | tile | T:gT_loc:C:Nr, T:kappaRk:C:Nr, T:recip_hFac:C:Nr | theta after implicit vertical advection + diffusion (and its inputs kappaRk, recip_hFac) |
 | `T02_temp_integrate` | MITgcm_c66g/model/src/thermodynamics.F:319 / MITgcm_c66g/model/src/thermodynamics.F:319 | tile | S:ta | theta advanced (AB3, implicit) |
 | `T20_salt_adv` | MITgcm_c66g/model/src/salt_integrate.F:277 / MITgcm_c66g/model/src/salt_integrate.F:277 | tile | T:gS_loc:C:Nr | salt: multi-dimensional DST3 advective tendency |
-| `T21_salt_gS` | MITgcm_c66g/model/src/salt_integrate.F:467 / MITgcm_c66g/model/src/salt_integrate.F:467 | tile | T:gS_loc:C:Nr | salt: total explicit tendency after forcing, diffusion, AB3 and r* rescale |
+| `T21_salt_gS` | before MITgcm_c66g/model/src/salt_integrate.F:467 / MITgcm_c66g/model/src/salt_integrate.F:467 | tile | T:gS_loc:C:Nr | salt: total explicit tendency after forcing, diffusion, AB3 and r* rescale |
 | `T22_salt_step` | MITgcm_c66g/model/src/salt_integrate.F:467 / MITgcm_c66g/model/src/salt_integrate.F:467 | tile | T:gS_loc:C:Nr | salt: S + dt*gS |
 | `T23_salt_impl` | MITgcm_c66g/model/src/salt_integrate.F:486 / MITgcm_c66g/model/src/salt_integrate.F:486 | tile | T:gS_loc:C:Nr, T:kappaRk:C:Nr, T:recip_hFac:C:Nr | salt after implicit vertical advection + diffusion (and its inputs) |
 | `T03_salt_integrate` | MITgcm_c66g/model/src/thermodynamics.F:330 / MITgcm_c66g/model/src/thermodynamics.F:330 | tile | S:ta | salt advanced (AB3, implicit) |
