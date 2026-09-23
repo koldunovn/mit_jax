@@ -65,6 +65,8 @@ def main(argv=None):
     ap.add_argument("--host-monitor", action="store_true",
                     help="exact host-side (numpy) %%MON statistics incl. del2 (slow: copies the 3-D state to the host)")
     ap.add_argument("--checkpoint-every", type=int, default=0, help="also write state_<iter>.npz every N steps")
+    ap.add_argument("--cg2d-unroll", type=int, default=1,
+                    help="Cg2dParams.sum_unroll: unroll the Fortran-order tile sums (bitwise identical; 5 on GPU)")
     a = ap.parse_args(argv)
     out = Path(a.outdir)
     out.mkdir(parents=True, exist_ok=False)
@@ -82,6 +84,9 @@ def main(argv=None):
     say(f"run_jax: {' '.join(sys.argv)}  devices={jax.devices()}")
     t0 = time.time()
     P, g, ex, kLowC = setup(rundir)
+    if a.cg2d_unroll != 1:
+        import dataclasses
+        P = P._replace(cg=dataclasses.replace(P.cg, sum_unroll=a.cg2d_unroll))
     L = g.layout
     loader = exf_mod.ExfRecordLoader(P.exf, g, rundir)
     nIter0 = int(nml.get("data", "parm03", "nIter0", default=0))
