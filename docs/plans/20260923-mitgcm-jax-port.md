@@ -366,6 +366,20 @@ compare outputs), so no task waits for a later package; full-step gates start in
   JAX's own checks (exact-mode FD plateau, TL/adjoint dot test, repeats, amplification screen). The measured TAF
   comparison moves to M3, once ctrl/smooth exist.
 
+➕ **M2 draft task list (2026-09-23, from docs/BRANCHES.md; NOT started — starts after M1 acceptance, Nikolay to
+review).** Oracle: `ref_full_jaxdump_v4` (full V4r4, 3 steps; new stages needed inside SEAICE_MODEL and EXF bulk).
+- M2.1 EXF full read path: adjusted-forcing fields (ERA-interim + adjustments, 6-hourly), exf_set_uv on the A grid +
+  EXCH_UV_AGRID, runoff monthly (cal_getmonthsrec), exf_radiation, exf_zenithangle(+table), exf_wind (wStress, wspeed).
+- M2.2 EXF_BULKFORMULAE (Large-Yeager, fixed iteration count), EXF_GETSURFACEFLUXES, EXF_MAPFIELDS full tree.
+- M2.3 Sea-ice thermodynamics: V4r4 seaice_growth.F override + seaice_solve4temp (fixed Newton count), budget ocean.
+- M2.4 Sea-ice dynamics: seaice_dynsolver → LSR (seaice_lsr + calc_coeffs, rhsu/v, tridiagu/v; 2 Picard × LSOR fixed
+  counts), strain rates, viscosities, ice strength, ocean stress/drag coeffs, freedrift (if executed), reg_ridge.
+- M2.5 Sea-ice advection/diffusion: seaice_advdiff, seaice_advection with gad_dst3fl_adv_x/y (DST3 flux-limited),
+  seaice_diffusion.
+- M2.6 Full-tree coupling: full forward_step/do_oceanic_phys (seaice_model call site, ice loading), find_alpha (where
+  executed), full-tree mom_calc_visc (same Gibraltar), pickup_seaice init, ctrl for the full tree.
+- M2.7 Runs: 11-step vs PO.DAAC snapshot (Fortran ref already within float32+compiler floor), 1-month, 1-year twin.
+
 ### M3 — Beyond (outline)
 - 26-year twin (testreport_ecco); GPU performance (1 GPU, 1 node, vmap ensembles) vs 96-core Fortran.
 - Measured TAF comparison (gradients and cost) once `xx_*` controls + WC01 exist; reference source to be decided then.
