@@ -36,28 +36,52 @@ class Record:
     tby: int
     olx: int
     oly: int
-    data: np.ndarray  # (nz, sNy+2*OLy, sNx+2*OLx), float64, halos included
+    _data: np.ndarray = None  # (nz, sNy+2*OLy, sNx+2*OLx), float64, halos included; loaded lazily
+    path: str = None
+    offset: int = 0
+    shape: tuple = None
+
+    @property
+    def data(self):
+        if self._data is None:
+            n = int(np.prod(self.shape))
+            with open(self.path, "rb") as fh:
+                fh.seek(self.offset)
+                buf = fh.read(8 * n)
+            self._data = np.frombuffer(buf, ">f8", count=n).reshape(self.shape).astype(np.float64)
+        return self._data
+
+    def drop(self):
+        """Forget the loaded values (they are re-read on the next access)."""
+        if self.path is not None:
+            self._data = None
 
     @property
     def interior(self):
         return self.data[:, self.oly:self.data.shape[1] - self.oly, self.olx:self.data.shape[2] - self.olx]
 
 
-def read_file(path):
-    raw = Path(path).read_bytes()
+def read_file(path, lazy=False):
+    """All records of one dump file. lazy=True reads only the headers (values are read on first access)."""
+    path = str(path)
+    size = Path(path).stat().st_size
     out, pos = [], 0
-    while pos < len(raw):
-        h = np.frombuffer(raw, _HDR, count=1, offset=pos)[0]
-        if h["magic"] != MAGIC:
-            raise ValueError(f"{path}: bad magic at byte {pos}")
-        pos += _HDR.itemsize
-        nz, sny, snx, oly, olx = (int(h[k]) for k in ("nz", "sny", "snx", "oly", "olx"))
-        n = nz * (sny + 2 * oly) * (snx + 2 * olx)
-        data = np.frombuffer(raw, ">f8", count=n, offset=pos).reshape(nz, sny + 2 * oly, snx + 2 * olx)
-        pos += 8 * n
-        out.append(Record(int(h["iter"]), int(h["seq"]), h["stage"].decode().strip(), h["field"].decode().strip(),
-                          h["kind"].decode().strip(), int(h["tile"]), int(h["face"]), int(h["tbx"]), int(h["tby"]),
-                          olx, oly, data.astype(np.float64)))
+    with open(path, "rb") as fh:
+        while pos < size:
+            fh.seek(pos)
+            h = np.frombuffer(fh.read(_HDR.itemsize), _HDR, count=1)[0]
+            if h["magic"] != MAGIC:
+                raise ValueError(f"{path}: bad magic at byte {pos}")
+            pos += _HDR.itemsize
+            nz, sny, snx, oly, olx = (int(h[k]) for k in ("nz", "sny", "snx", "oly", "olx"))
+            shape = (nz, sny + 2 * oly, snx + 2 * olx)
+            r = Record(int(h["iter"]), int(h["seq"]), h["stage"].decode().strip(), h["field"].decode().strip(),
+                       h["kind"].decode().strip(), int(h["tile"]), int(h["face"]), int(h["tbx"]), int(h["tby"]),
+                       olx, oly, path=path, offset=pos, shape=shape)
+            if not lazy:
+                r.data  # noqa: B018 (load now)
+            out.append(r)
+            pos += 8 * int(np.prod(shape))
     return out
 
 
@@ -78,7 +102,7 @@ class DumpSet:
         for it in sorted(per_iter_tile):
             first = True
             for f in sorted(per_iter_tile[it]):
-                for r in read_file(f):
+                for r in read_file(f, lazy=True):
                     key = (r.iter, r.stage, r.field)
                     if key not in self.index:
                         self.index[key] = {}

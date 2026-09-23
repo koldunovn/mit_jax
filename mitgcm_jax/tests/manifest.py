@@ -28,6 +28,8 @@ MANIFEST = {
     "mitgcm_jax/tests/test_io_readers.py": "smoke",
     "mitgcm_jax/tests/test_monitor.py": "smoke",
     "mitgcm_jax/tests/test_dump_io.py": "smoke",
+    "mitgcm_jax/tests/test_exchange.py": "tier1",
+    "mitgcm_jax/tests/test_grid.py": "tier1",
 }
 
 # Directories searched for test files (must match pyproject testpaths).
