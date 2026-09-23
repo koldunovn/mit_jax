@@ -154,17 +154,35 @@ def _verify(path, alg):
     return str(path.stat().st_size) if alg == "size" else _hash(path, alg)
 
 
-def download(op, url, dest, size_hint, retries=5):
+def download(op, url, dest, size_hint, retries=50):
+    """Stream `url` into `<dest>.part`, resuming via HTTP Range. A stream that ends early is NOT completion: PO.DAAC's
+    signed redirect URLs expire (a 92 GiB transfer was cut at 36.6 GiB with no error), so every short read gets a
+    fresh authenticated request from the current .part size. Completion = byte count equals the expected size."""
     part = dest.with_name(dest.name + ".part")
+    expected = None  # only the server's Content-Range/Length decides (CMR sizes can be rounded MB); size_hint: display
     for attempt in range(retries):
         have = part.stat().st_size if part.exists() else 0
+        if expected and have == expected:
+            return part
+        if expected and have > expected:
+            raise SystemExit(f"{part} is larger ({have}) than expected ({expected}); inspect by hand")
         req = urllib.request.Request(url, headers={"Range": f"bytes={have}-"} if have else {})
         try:
-            with op.open(req, timeout=300) as r:
+            try:
+                r = op.open(req, timeout=300)
+            except urllib.error.HTTPError as e:
+                if e.code == 416 and have:  # range starts at/after the end: nothing left to fetch
+                    return part
+                raise
+            with r:
                 if have and r.status != 206:
                     have = 0  # server ignored Range: restart this partial file from byte 0
+                cr = r.headers.get("Content-Range")  # "bytes a-b/total"
+                if cr and "/" in cr and cr.rsplit("/", 1)[1].isdigit():
+                    expected = int(cr.rsplit("/", 1)[1])
+                elif not have and r.headers.get("Content-Length"):
+                    expected = int(r.headers["Content-Length"])
                 mode = "ab" if have else "wb"
-                total = size_hint or (have + int(r.headers.get("Content-Length", 0)))
                 t0, done = time.time(), have
                 with open(part, mode) as f:
                     while True:
@@ -175,14 +193,16 @@ def download(op, url, dest, size_hint, retries=5):
                         done += len(chunk)
                         if time.time() - t0 > 30:
                             rate = (done - have) / (time.time() - t0) / 2**20
-                            print(f"    {dest.name}: {done / 2**30:.2f}/{(total or 0) / 2**30:.2f} GiB, "
+                            print(f"    {dest.name}: {done / 2**30:.2f}/{(expected or size_hint or 0) / 2**30:.2f} GiB, "
                                   f"{rate:.1f} MiB/s", flush=True)
                             t0, have = time.time(), done
-            return part
+            if expected is None or done == expected:
+                return part
+            print(f"    stream ended at {done} of {expected} bytes; resuming (attempt {attempt + 1})", flush=True)
         except (urllib.error.URLError, OSError, TimeoutError) as e:
             print(f"    attempt {attempt + 1} failed: {e!r}; retrying in 30 s", flush=True)
             time.sleep(30)
-    raise SystemExit(f"download failed after {retries} attempts: {url}")
+    raise SystemExit(f"download incomplete after {retries} attempts: {url}")
 
 
 def _record(outdir, dest, alg, want):

@@ -54,3 +54,7 @@ One entry per task, written in the same commit as the task. Cite `file:line`; st
   for `&`-terminated files. Cross-check: parsed key count equals the count of `key =` lines in every file.
 - Namelist diff between the trees found a forward difference the code audit could not: ff `data` sets
   `temp_EvPrRn = 0.` (added to docs/OVERRIDES.md), and ff `data.autodiff` keeps salt plume in the adjoint.
+- A stream that ends is not a finished download. PO.DAAC's signed redirect URL expired mid-transfer: the 92 GiB
+  archive stopped at 36.6 GiB with no error, the script treated EOF as completion, and only the sha512 check caught
+  it. The downloader now trusts only the server's Content-Range/Length, resumes every short read with a fresh
+  authenticated request, and treats HTTP 416 on resume as "already complete"; the checksum still decides.
