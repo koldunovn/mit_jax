@@ -30,6 +30,7 @@ addopts = "-p no:cacheprovider"
 markers = [
     "smoke: seconds-scale checks, safe to run locally (`pytest -m smoke`)",
     "tier1: fast suite (<10 min on one CPU compute node, every commit)",
+    "tier1x: extended CPU suite: kernel replay gates, gradient checks, data re-hash (~15 min)",
     "tier2: GPU suite (~1 h, nightly/milestone)",
     "tier3: milestone climate twins",
 ]

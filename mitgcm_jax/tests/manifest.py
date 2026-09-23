@@ -6,12 +6,15 @@ collect a test file that is not listed here, so a new file cannot silently land 
 
 Groups:
     smoke  seconds; safe on a login node (`pytest -m smoke`); also part of tier 1
-    tier1  fast suite: < 10 min and < 100 tests on one CPU compute node, every commit
+    tier1  fast suite: < 10 min and < 100 tests on one CPU compute node, every commit; includes the integrated
+           one-step gate (test_step_fluxforced.py), which is bitwise at every stage and so covers every kernel
+    tier1x extended CPU suite (~15 min): per-kernel replay gates, negative controls and gradient-vs-FD checks, data
+           re-hash; nightly and whenever a kernel changes (scripts/run_tier1x.sbatch)
     tier2  GPU suite, ~1 h, nightly / milestone
     tier3  milestone climate twins
 """
 
-GROUPS = ("smoke", "tier1", "tier2", "tier3")
+GROUPS = ("smoke", "tier1", "tier1x", "tier2", "tier3")
 
 # Tier 1 as run by scripts/run_tier1.sbatch.
 TIER1_EXPRESSION = "smoke or tier1"
@@ -22,7 +25,7 @@ MANIFEST = {
     "mitgcm_jax/tests/test_manifest.py": "smoke",
     "scripts/tests/test_check_pytest_report.py": "smoke",
     "scripts/tests/test_overrides.py": "tier1",
-    "scripts/tests/test_data_manifest.py": "tier1",
+    "scripts/tests/test_data_manifest.py": "tier1x",
     "scripts/tests/test_llc_layout.py": "tier1",
     "scripts/tests/test_reference.py": "tier1",
     "mitgcm_jax/tests/test_io_readers.py": "smoke",
@@ -34,18 +37,18 @@ MANIFEST = {
     "mitgcm_jax/tests/test_monitor_stats.py": "tier1",
     "mitgcm_jax/tests/test_exf_fluxforced.py": "tier1",
     "mitgcm_jax/tests/test_grid_load.py": "tier1",
-    "mitgcm_jax/tests/test_phi_hyd.py": "tier1",
-    "mitgcm_jax/tests/test_dynamics.py": "tier1",
-    "mitgcm_jax/tests/test_ggl90.py": "tier1",
-    "mitgcm_jax/tests/test_mom_vecinv.py": "tier1",
-    "mitgcm_jax/tests/test_visc.py": "tier1",
-    "mitgcm_jax/tests/test_eos_sigma.py": "tier1",
-    "mitgcm_jax/tests/test_salt_plume.py": "tier1",
-    "mitgcm_jax/tests/test_gmredi.py": "tier1",
-    "mitgcm_jax/tests/test_thermo.py": "tier1",
-    "mitgcm_jax/tests/test_gad.py": "tier1",
-    "mitgcm_jax/tests/test_cg2d.py": "tier1",
-    "mitgcm_jax/tests/test_free_surface.py": "tier1",
+    "mitgcm_jax/tests/test_phi_hyd.py": "tier1x",
+    "mitgcm_jax/tests/test_dynamics.py": "tier1x",
+    "mitgcm_jax/tests/test_ggl90.py": "tier1x",
+    "mitgcm_jax/tests/test_mom_vecinv.py": "tier1x",
+    "mitgcm_jax/tests/test_visc.py": "tier1x",
+    "mitgcm_jax/tests/test_eos_sigma.py": "tier1x",
+    "mitgcm_jax/tests/test_salt_plume.py": "tier1x",
+    "mitgcm_jax/tests/test_gmredi.py": "tier1x",
+    "mitgcm_jax/tests/test_thermo.py": "tier1x",
+    "mitgcm_jax/tests/test_gad.py": "tier1x",
+    "mitgcm_jax/tests/test_cg2d.py": "tier1x",
+    "mitgcm_jax/tests/test_free_surface.py": "tier1x",
 }
 
 # Directories searched for test files (must match pyproject testpaths).
