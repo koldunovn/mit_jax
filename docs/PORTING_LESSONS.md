@@ -434,3 +434,20 @@ Production runs may use XLA defaults (ulp-level differences only).
 - Amplification screens (Nikolay: "whatever ECCO does"): ECCO/MITgcm monitors adjoint variables per field
   (mon_AdVarExch, AUTODIFF_PARAMS.h) and checks gradients point-wise (grdchk) — no cross-field norm; our per-field
   screen + FD sweeps match that.
+
+## M2.6b-2 — full-V4r4 FORWARD_STEP (2026-09-23, sub-agent)
+- The composed full-tree step (bulk EXF, CTRL_MAP_FORCING, pre-ice zeroing, SEAICE_MODEL, SALT_PLUME_DO_EXCH +
+  EXTERNAL_FORCING_SURF, ocean) was bitwise on the first run: 820 dumped (stage, field) pairs of step 1, the free run to
+  iteration 4 vs the Fortran pickups, step 1 from the pickup, and 24 steps from the pickup vs the 1-day run's pickups
+  (all 18 fields). Kernel gates on dumped inputs + a gated initial state reduced the composition to wiring.
+- A "running view" gate (apply each stage's writes in Fortran order, compare every dumped field) makes "every stage" an
+  exact inventory: dumped-but-uncomputed values (previous-step PRESS0, never-written saltWtrIce) are asserted as a set.
+- jnp.full makes weakly typed arrays and weak types survive jit: a State from the initialisation compiled a second
+  program. Cast initial states to strong types.
+- ff byte-identity checked by jaxpr-text equality against a git archive export of HEAD (exact, ECCO, all switches).
+- Production XLA flags: print-precision equal through iteration 2, then SEAICE_GROWTH exact-zero branches flip
+  (HSNOW -2e-58 vs 0) at ~30 points -> ice means 1e-7 rel at it 3, 2e-6 at it 25 (LSOR counts unchanged): compare
+  production-flag sea-ice runs statistically; gate-flag CPU runs stay bitwise.
+- In the full ECCO configuration the saltPlumeFlux seam is redundant (the sea-ice skip already cuts that path); only
+  the depth seam changes derivatives. AdjointConfig.seaice defaults to "ecco" everywhere (Nikolay).
+- CPU cost: ~6.3 s/step (16-32 cores, sequential LSR sweeps dominate); compile ~45 s; setup + init ~4-5 min.

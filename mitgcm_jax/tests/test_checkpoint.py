@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 
 from mitgcm_jax.adjoint import checkpoint as ck
+from mitgcm_jax.adjoint.modes import EXACT
 from mitgcm_jax.adjoint import grad as gr
 from mitgcm_jax.model import setup
 from mitgcm_jax.params_io import RunNamelists
@@ -42,7 +43,7 @@ def win():
     inner = (slice(None), slice(L.OLy, L.OLy + L.sNy), slice(L.OLx, L.OLx + L.sNx))
     wC[inner] = (np.asarray(g.rA) * np.asarray(g.maskC)[:, 0])[inner]
     wC = jnp.asarray(wC / wC.sum())
-    return dict(P=P, g=g, ex=ex, model=ck.Model(P, g, kLowC, ex), st0=st0, xs=xs, step=ck.make_step(), wC=wC)
+    return dict(P=P, g=g, ex=ex, model=ck.Model(P, g, kLowC, ex), st0=st0, xs=xs, step=ck.make_step(EXACT), wC=wC)
 
 
 def _costs(wC):

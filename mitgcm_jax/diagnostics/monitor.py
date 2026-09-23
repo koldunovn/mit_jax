@@ -1,4 +1,5 @@
-"""%MON dynstat statistics of a state, host-side numpy (pkg/monitor/monitor.F, mon_calc_stats_rl.F).
+"""%MON dynstat statistics of a state, host-side numpy (pkg/monitor/monitor.F, mon_calc_stats_rl.F); full V4r4 tree
+also the sea-ice (SEAICE_MONITOR) and EXF (EXF_MONITOR) blocks.
 
 For comparing JAX runs with the Fortran STDOUT %MON lines (mitgcm_jax/io/monitor.py parses those). Not in the AD
 path. Sums are per tile then over tiles in order (GLOBAL_SUM_TILE_RL); within a tile numpy sums pairwise, not in the
@@ -94,3 +95,41 @@ def dynstat_device(st, g):
             "wvel": stats(st.wVel, g.maskC, g.maskInC, g.rA, thickF),
             "theta": stats(st.theta, st.hFacC, g.maskInC, g.rA, thickC),
             "salt": stats(st.salt, st.hFacC, g.maskInC, g.rA, thickC)}
+
+
+# SEAICE_MONITOR (pkg/seaice/seaice_monitor.F:108-131; SEAICE_CGRID, useThSIce = F, SEAICE_VARIABLE_SALINITY and
+# ALLOW_SITRACER undefined): MON_WRITESTATS_RL(1, field, suffix, hFac = mask, mask, area, drF)
+SEAICE_MON = (("uice", "UICE", "maskInW", "rAw"), ("vice", "VICE", "maskInS", "rAs"), ("area", "AREA", "maskInC", "rA"),
+              ("heff", "HEFF", "maskInC", "rA"), ("hsnow", "HSNOW", "maskInC", "rA"))
+# EXF_MONITOR (pkg/exf/exf_monitor.F:111-192) with the full V4r4 data.exf / EXF_OPTIONS.h: stress on the A grid
+# (stressIsOnCgrid = F: maskInC, rA), hflux/sflux/evap computed, useAtmWind = F (no uwind/vwind), snowprecipfile ' ',
+# no runoftemp; every field with maskInC, rA. In the order the Fortran prints them.
+EXF_MON = ("ustress", "vstress", "hflux", "sflux", "wspeed", "atemp", "aqh", "lwflux", "evap", "precip", "swflux",
+           "swdown", "lwdown", "apressure", "runoff")
+
+
+def seaice_stats(state, g, layout):
+    """seaice_monitor.F:108-131: {name: stats} of the sea-ice state (min, max, mean, sd, del2 over mask > 0)."""
+    dr = np.asarray(g.drF)[:1]
+    return {name: mon_calc_stats(state.f[fld], g.f[mask], g.f[mask], g.f[area], dr, layout)
+            for name, fld, mask, area in SEAICE_MON}
+
+
+def exf_stats(exf, g, layout):
+    """exf_monitor.F:111-192 on the EXF_FIELDS arrays as EXF_MONITOR sees them (exf_getforcing.F:296: after
+    hflux += swflux, before EXF_MAPFIELDS; forward_step aux["exf_monitor"])."""
+    dr = np.asarray(g.drF)[:1]
+    return {name: mon_calc_stats(exf[name], g.maskInC, g.maskInC, g.rA, dr, layout) for name in EXF_MON}
+
+
+def format_stats(prefix, stats, it, time_sec=None):
+    """%MON <prefix>_tsnumber, <prefix>_time_sec and <prefix>_<name>_{max,min,mean,sd,del2} lines (mon_writestats_rl.F
+    order), as SEAICE_MONITOR (prefix 'seaice') and EXF_MONITOR (prefix 'exf') print them."""
+    lines = [f"%MON {prefix}_tsnumber = {it}"]
+    if time_sec is not None:
+        lines.append(f"%MON {prefix}_time_sec = {time_sec: .13E}")
+    for name, st in stats.items():
+        for k in ("max", "min", "mean", "sd", "del2"):
+            if k in st:
+                lines.append(f"%MON {prefix}_{name}_{k} = {st[k]: .13E}")
+    return "\n".join(lines)

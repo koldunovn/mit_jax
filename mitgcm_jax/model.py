@@ -11,12 +11,24 @@ adjustments of ff CTRL_MAP_INI_GENARR (xx_kapgm, xx_kapredi, xx_diffkr; pkgs/ctr
 INITIALISE_VARIA after INI_MIXING; a grid passed in is taken as it is (a dumped G00 grid already holds them) unless
 ctrl_mixing=True. The state controls (etaN, theta, salt, uVel, vVel) are applied by init.state_from_pickup.
 
-Full V4r4 tree (plan M2.6a; recognised by the absence of READIN_SALT_PLUME_FLUX, core/external_forcing.
+Full V4r4 tree (plan M2.6a/M2.6b-2; recognised by the absence of READIN_SALT_PLUME_FLUX, core/external_forcing.
 readin_salt_plume_flux): the ocean parameters come from the same readers (the full-tree branches are inside them:
-CALC_OCE_MXLAYER method 1, the sea-ice-aware DO_OCEANIC_PHYS forcing halves, temp_EvPrRn unset); the grid gets the
-static sea-ice fields of SEAICE_INIT_VARIA (HEFFM, k1AtC, k1AtZ, k2AtC, k2AtZ; pkgs/seaice_init.seaice_geometry).
-HOOK (M2.6b): P.exf is None for the full tree -- its bulk-formula EXF (pkgs/exf_full.ExfFullParams) and the sea-ice
-parameters (pkgs/seaice_*) are not part of ModelParams yet, and forward_step refuses P.exf = None.
+CALC_OCE_MXLAYER method 1, the sea-ice-aware DO_OCEANIC_PHYS forcing halves, temp_EvPrRn unset). P.exf is None (the
+flux-forced EXF reader) and instead
+  P.exfb    = pkgs/exf_full.ExfFullParams (bulk-formula EXF, EXF_GETFORCING full path),
+  P.seaice  = pkgs/seaice_model.SeaiceParams (SEAICE_MODEL and its four kernels);
+the grid gets the static fields both need (computed once on the host, carried as Grid fields so that they are jit
+arguments and shard like every grid field):
+  HEFFM, k1AtC, k1AtZ, k2AtC, k2AtZ   SEAICE_INIT_VARIA seaice_init_varia.F:63-146 (pkgs/seaice_init.seaice_geometry)
+  seaiceMaskU, seaiceMaskV, tensileStrFac   seaice_init_varia.F:378-391, 442, 312 (seaice_init.seaice_dyn_masks; static
+                                      in V4r4: the per-step recomputation is compiled out under ALLOW_AUTODIFF_TAMC)
+  zs_<k> for k in ZS_KEYS             the grid-only factors of EXF_ZENITHANGLE (pkgs/exf_full.zenith_static: albedo
+                                      table (366, 181), latitude pointers/weights, sincos(yC), tan(yC), xC in radians)
+`zenith_static_of(g)` returns the zs dict exf_full.exf_getforcing expects.
+
+Tree selection (Nikolay, 2026-09-23): by default the tree is detected from the namelists (`detect_tree`); `setup(...,
+tree="ff" | "full")` (and init.state_from_pickup(..., tree=...), scripts/run_jax.py --tree) declares it explicitly and
+raises ValueError when the declaration contradicts what the namelists imply (`resolve_tree`).
 """
 
 from pathlib import Path
@@ -31,7 +43,7 @@ from mitgcm_jax.core import grad_sigma as rs_mod
 from mitgcm_jax.core import thermodynamics as th_mod
 from mitgcm_jax.core import tracers_correction as tc
 from mitgcm_jax.core.cg2d import Cg2dParams, ini_cg2d_norm
-from mitgcm_jax.core.forward_step import ModelParams
+from mitgcm_jax.core.forward_step import ZS_KEYS, ModelParams, zenith_static_of  # noqa: F401 (re-exported)
 from mitgcm_jax.core.phi_hyd import kLowC_from_hFac
 from mitgcm_jax.io.llc import compact_to_tiles
 from mitgcm_jax.io.mds import read_bin
@@ -40,12 +52,15 @@ from mitgcm_jax.params_io import RunNamelists
 from mitgcm_jax.parallel.exchange import default_exchanger
 from mitgcm_jax.pkgs import ctrl as ctrl_mod
 from mitgcm_jax.pkgs import exf_fluxforced as exf_mod
+from mitgcm_jax.pkgs import exf_full as exfb_mod
 from mitgcm_jax.pkgs import gad as gad_mod
 from mitgcm_jax.pkgs import ggl90 as ggl_mod
 from mitgcm_jax.pkgs import gmredi as gm_mod
 from mitgcm_jax.pkgs import mom_vecinv as mv_mod
 from mitgcm_jax.pkgs import salt_plume as sp_mod
 from mitgcm_jax.pkgs import seaice_init as si_mod
+from mitgcm_jax.pkgs import seaice_model as sm_mod
+
 
 GRID_DIR = Path("/work/ab0995/a270088/MIT/data/eccov4r4/native_grid_files")
 
@@ -78,9 +93,38 @@ def _ctrl_mixing(nml, g, ex):
     return g.replace(**{k: np.asarray(out[k]) for k in ctrl_mod.MIXING_TARGETS})
 
 
-def setup(rundir, grid=None, grid_dir=GRID_DIR, layout=None, ctrl_mixing=None):
+TREES = ("ff", "full")
+
+
+def detect_tree(nml):
+    """The V4r4 build tree of a run directory, from its namelists: "ff" (flux-forced: READIN_SALT_PLUME_FLUX, whose
+    only run-directory signature is the spflxfile key of data.exf EXF_NML_02, core/external_forcing.
+    readin_salt_plume_flux) or "full" (bulk-formula EXF and sea ice)."""
+    return "ff" if ef.readin_salt_plume_flux(nml) else "full"
+
+
+def resolve_tree(nml, tree=None):
+    """`tree` (None: detect) checked against the namelists: an explicit "ff" / "full" that contradicts them (spflxfile
+    in data.exf, useSEAICE in data.pkg) is an error, not an override that the parameter readers would then half-apply."""
+    detected = detect_tree(nml)
+    if tree is None:
+        return detected
+    if tree not in TREES:
+        raise ValueError(f"tree={tree!r}: one of {TREES} (or None: detect from the namelists)")
+    if tree != detected:
+        spflx = nml.has("data.exf", "exf_nml_02", "spflxfile")
+        seaice = bool(nml.get("data.pkg", "packages", "useSEAICE", default=False))
+        raise ValueError(f"tree={tree!r} contradicts the run directory {nml.dir}: its namelists imply {detected!r} "
+                         f"(data.exf EXF_NML_02 spflxfile {'set' if spflx else 'absent'}: READIN_SALT_PLUME_FLUX "
+                         f"{'defined (flux-forced build)' if spflx else 'undefined (full build)'}; data.pkg useSEAICE = "
+                         f"{seaice})")
+    return tree
+
+
+def setup(rundir, grid=None, grid_dir=GRID_DIR, layout=None, ctrl_mixing=None, tree=None):
     L = layout or Layout()
     nml = RunNamelists(rundir)
+    full_tree = resolve_tree(nml, tree) == "full"          # detect_tree unless declared (module docstring)
     ex = default_exchanger(L)
     if ctrl_mixing is None:
         ctrl_mixing = grid is None
@@ -90,15 +134,22 @@ def setup(rundir, grid=None, grid_dir=GRID_DIR, layout=None, ctrl_mixing=None):
     g = grid.replace(**_extra_grid_fields(nml, grid, ex, rundir))
     if ctrl_mixing and nml.get("data.pkg", "packages", "useCTRL", default=False):
         g = _ctrl_mixing(nml, g, ex)                     # initialise_varia.F:219 PACKAGES_INIT_VARIABLES -> CTRL
-    full_tree = not ef.readin_salt_plume_flux(nml)
-    if nml.get("data.pkg", "packages", "useSEAICE", default=False):
+    useSEAICE = bool(nml.get("data.pkg", "packages", "useSEAICE", default=False))
+    if useSEAICE:
         g = g.replace(**si_mod.seaice_geometry(g))       # seaice_init_varia.F:63-146 (static sea-ice fields)
+        # seaice_init_varia.F:378-391, 442, 312: seaiceMaskU/V, tensileStrFac (static in V4r4, pkgs/seaice_init.py)
+        g = g.replace(**{k: np.asarray(v) for k, v in si_mod.seaice_dyn_masks(g, ex, g.HEFFM).items()})
+    exfb = None
+    if full_tree:
+        exfb = exfb_mod.ExfFullParams.from_namelists(nml)
+        zs = exfb_mod.zenith_static(exfb, g)
+        assert tuple(zs) == ZS_KEYS, tuple(zs)
+        g = g.replace(**{"zs_" + k: np.asarray(v) for k, v in zs.items()})
     kLowC = np.asarray(kLowC_from_hFac(np.asarray(g.h0FacC)))
     fsp = fs.FreeSurfParams.from_namelists(nml)
     norm = ini_cg2d_norm(g, g.h0FacW, g.h0FacS, fsp.implicSurfPress, fsp.implicDiv2DFlow)
     P = ModelParams(
-        # HOOK M2.6b: the full tree's EXF (pkgs/exf_full.ExfFullParams) is not wired into ModelParams yet
-        exf=None if full_tree else exf_mod.ExfParams.from_namelists(nml),
+        exf=None if full_tree else exf_mod.ExfParams.from_namelists(nml),    # full tree: P.exfb
         sf=ef.SurfForcingParams.from_namelists(nml),
         rs=rs_mod.RhoSigmaParams.from_namelists(nml, g),
         sp=sp_mod.SaltPlumeParams.from_namelists(nml),
@@ -114,6 +165,8 @@ def setup(rundir, grid=None, grid_dir=GRID_DIR, layout=None, ctrl_mixing=None):
         tc=tc.TracersCorrectionParams.from_namelists(nml),
         ctrl=(ctrl_mod.CtrlConfig.from_namelists(nml) if nml.get("data.pkg", "packages", "useCTRL", default=False)
               else None),
+        exfb=exfb,
+        seaice=sm_mod.SeaiceParams.from_namelists(nml, g) if useSEAICE else None,
     )
     g = type(g)({k: (jnp.asarray(v) if not isinstance(v, (int, float)) else v) for k, v in g.f.items()}, g.layout)
     return P, g, ex, jnp.asarray(kLowC)

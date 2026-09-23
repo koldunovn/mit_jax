@@ -13,6 +13,9 @@ calcMixLayerDepth (calc_oce_mxlayer.F:66-77):
     method 1 with FIND_ALPHA (JMD95), no smoothing.
 hMixLayer is read by the ocean physics only in GMREDI's fm07 taper / sub-mesoscale code (not V4r4): in V4r4 it is a
 diagnostic that is part of the dumped state (S00_begin / P02 group m).
+Decision (Nikolay, 2026-09-23): the full-tree production step keeps this diagnostics-driven branch literally (method 1
+with FIND_ALPHA every step, as the Fortran build with its data.diagnostics runs it); it is not skipped, even though no
+prognostic field reads hMixLayer.
 
 Method 1 (calc_oce_mxlayer.F:85-131), on the full tile 1-OLx..sNx+OLx, 1-OLy..sNy+OLy:
     rhoMxL    = FIND_ALPHA(k=1, kRef=1)                                   :96-98

@@ -3,7 +3,8 @@
     theta -> J:   st0 = init_fn(theta, st0_base); model = params_fn(theta, model_base);
                   (st_n, acc) = integrate(step, model, st0, xs); J = final_cost(model, st_n) + acc
 
-`theta` is any pytree of controls. `init_fn(theta, st)` puts the initial-state controls into the State (default: a
+`step` carries the backward-mode semantics (checkpoint.make_step: default the run's ECCO config, AdjointConfig.ecco(nml),
+Nikolay 2026-09-23; the exact adjoint is make_step(AdjointConfig())). `theta` is any pytree of controls. `init_fn(theta, st)` puts the initial-state controls into the State (default: a
 dict of State fields replaced by theta's entries); `params_fn(theta, model)` puts parameter/field controls into the
 Model (default: the identity). Both run inside the differentiated function, so any State or Model leaf can be a
 control. `cost(model, st, x)` is accumulated after every step (checkpoint.integrate), `final_cost(model, st_n)` is

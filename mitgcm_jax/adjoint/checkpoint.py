@@ -2,8 +2,13 @@
 
     xs = exf_window(loader, nml, it0, n)                    # host: the EXF record inputs of steps it0 .. it0+n-1
     model = Model(P, g, kLowC, ex)                          # pytree, a jit ARGUMENT (never closed over)
-    step = make_step(adj)                                   # (model, st, x) -> st, one FORWARD_STEP
+    step = make_step(nml=nml)                               # (model, st, x) -> st, one FORWARD_STEP, ECCO semantics
+    step = make_step(AdjointConfig())                       # ... or an explicit config (here: exact)
     st_n, acc = integrate(step, model, st0, xs, schedule="step")
+
+Default gradient semantics (Nikolay, 2026-09-23): ECCO, i.e. AdjointConfig.ecco(nml) of the run's own data.autodiff
+(flux-forced or full tree; seaice "ecco"). make_step without a config therefore needs the run's namelists; the exact
+adjoint (AdjointConfig()) and any other config are explicit choices. docs/ADJOINT_MODES.md section 4.
 
 Schedules (what the reverse pass stores; the forward values are the same in every schedule, tested):
   "none"   plain scan: every intermediate of every step is kept (only for tiny windows / tests)
@@ -16,9 +21,10 @@ Long windows: `grad.chunked_value_and_grad` (chunks of this integrator, boundari
 The carry is (State, acc): `acc` accumulates an optional running cost `cost(model, st_new, x)` after every step, so
 a time-integrated objective (box-mean theta over a window) needs no stored trajectory. With no cost, acc stays 0.
 
-EXF inputs: `exf_window` runs the host-side record loader (ExfRecordLoader, the literal exf_set_fld.F record logic)
-for the window's steps and stacks what FORWARD_STEP consumes per step (fld0/fld1 buffers, interpolation weights,
-myTime) on a leading step axis, as numpy (device_put per chunk by the caller). ~16 MB per step at LLC90.
+EXF inputs: `exf_window` runs the host-side record loader (ExfRecordLoader, the literal exf_set_fld.F record logic;
+full tree: ExfFullRecordLoader + the date-only zenith-angle scalars exf_full.zenith_time) for the window's steps and
+stacks what FORWARD_STEP consumes per step (fld0/fld1 buffers, interpolation weights, myTime; full tree also zt) on a
+leading step axis, as numpy (device_put per chunk by the caller). ~16 MB per step at LLC90.
 
 Why a scan (fesom_jax lesson): reverse mode through a Python loop of jitted steps cannot be rematerialized and
 keeps every step's intermediates; a scan with a checkpointed body keeps only the carries. The scan is bitwise equal
@@ -33,9 +39,10 @@ import jax.numpy as jnp
 import numpy as np
 from jax import lax
 
-from mitgcm_jax.adjoint.modes import EXACT
+from mitgcm_jax.adjoint.modes import AdjointConfig
 from mitgcm_jax.core.forward_step import forward_step
 from mitgcm_jax.pkgs import exf_fluxforced as exf_mod
+from mitgcm_jax.pkgs import exf_full as exfb_mod
 
 SCHEDULES = ("none", "step", "sqrt")
 # Intermediates the rematerialized reverse pass keeps instead of recomputing (jax.ad_checkpoint.checkpoint_name in the
@@ -55,9 +62,21 @@ class Model(NamedTuple):
     ex: Any      # parallel.exchange.Exchanger (a pytree: its maps are leaves)
 
 
-def make_step(adj=EXACT):
+def make_step(adj=None, *, nml=None):
     """(model, st, x) -> st: one FORWARD_STEP with backward-mode semantics `adj` (static AdjointConfig); x = one step
-    of `exf_window` inputs. The aux outputs are dropped."""
+    of `exf_window` inputs. The aux outputs are dropped.
+
+    Default (adj None): the ECCO semantics of the run, AdjointConfig.ecco(nml) (Nikolay, 2026-09-23); pass the run's
+    namelists (params_io.RunNamelists). adj=AdjointConfig() is the exact adjoint (TL/dot tests, FD checks)."""
+    if adj is None:
+        if nml is None:
+            raise ValueError("make_step: the default gradient semantics is the run's ECCO config, "
+                             "AdjointConfig.ecco(nml): pass nml=RunNamelists(rundir), or adj=AdjointConfig() (exact) / "
+                             "another explicit AdjointConfig")
+        adj = AdjointConfig.ecco(nml)
+    elif nml is not None:
+        raise ValueError("make_step: pass either adj or nml (the ECCO default), not both")
+
     def step(model, st, x):
         st1, _ = forward_step(model.P, model.g, model.ex, model.kLowC, st, x, adj=adj)
         return st1
@@ -68,11 +87,15 @@ def make_step(adj=EXACT):
 # EXF inputs
 
 
-def exf_step_input(bufs, facs, myTime):
-    """One step's EXF input as FORWARD_STEP takes it, from ExfRecordLoader.load (numpy, float64)."""
-    return {"bufs": {k: (np.asarray(v[0]), np.asarray(v[1])) for k, v in bufs.items()},
-            "facs": {k: np.float64(v) for k, v in facs.items()},
-            "myTime": np.float64(myTime)}
+def exf_step_input(bufs, facs, myTime, zt=None):
+    """One step's EXF input as FORWARD_STEP takes it, from ExfRecordLoader.load (numpy, float64); full tree also zt
+    (exf_full.zenith_time: float64 scalars, the table rows as integers)."""
+    x = {"bufs": {k: (np.asarray(v[0]), np.asarray(v[1])) for k, v in bufs.items()},
+         "facs": {k: np.float64(v) for k, v in facs.items()},
+         "myTime": np.float64(myTime)}
+    if zt is not None:
+        x["zt"] = {k: (np.int64(v) if isinstance(v, (int, np.integer)) else np.float64(v)) for k, v in zt.items()}
+    return x
 
 
 def exf_window(loader, nml, it0, n):
@@ -85,14 +108,18 @@ def exf_window(loader, nml, it0, n):
     for it in range(it0, it0 + n):
         myTime, myIter = exf_mod.model_time(nml, it - nIter0 + 1)
         bufs, facs, _ = loader.load(myTime, myIter)
-        steps.append(exf_step_input(bufs, facs, myTime))
+        zt = exfb_mod.zenith_time(loader.p, myTime, myIter) if isinstance(loader, exfb_mod.ExfFullRecordLoader) \
+            else None
+        steps.append(exf_step_input(bufs, facs, myTime, zt))
     return stack_steps(steps)
 
 
 def exf_loader_at(P, g, rundir, nml, it0):
-    """A fresh ExfRecordLoader advanced to iteration it0 (replays the record logic of nIter0 .. it0-1: reads only
-    the records those steps load; no model work), as scripts/run_jax.py does on a restart."""
-    loader = exf_mod.ExfRecordLoader(P.exf, g, rundir)
+    """A fresh ExfRecordLoader (full tree: ExfFullRecordLoader) advanced to iteration it0 (replays the record logic
+    of nIter0 .. it0-1: reads only the records those steps load; no model work), as scripts/run_jax.py does on a
+    restart."""
+    loader = (exfb_mod.ExfFullRecordLoader(P.exfb, g, rundir) if P.exfb is not None
+              else exf_mod.ExfRecordLoader(P.exf, g, rundir))
     nIter0 = int(nml.get("data", "parm03", "nIter0", default=0))
     for it in range(nIter0, it0):
         loader.load(*exf_mod.model_time(nml, it - nIter0 + 1))

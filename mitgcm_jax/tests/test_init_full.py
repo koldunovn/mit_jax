@@ -5,9 +5,12 @@ geothermal flux, bulk-formula EXF) against the Fortran state at the start of ite
   - grid from the files (grid_from_files) + the ctrl-adjusted mixing fields kapGM, kapRedi, diffKr (INI_MIXING +
     CTRL_MAP_INI_GENARR) == G00_geometry, every G2D/G3D/R3D field and the vertical rows, halos included;
     the static sea-ice fields of SEAICE_INIT_VARIA (HEFFM, k1AtC, k1AtZ, k2AtC, k2AtZ) == G01_seaice_geometry.
-  - State == Fortran: every S00_begin field (except the EXF_FIELDS arrays ustress ... apressure, owned by the
-    full-tree EXF port and not carried until M2.6b) and the r* fields of G00 group R; the sea-ice state AREA, HEFF,
-    HSNOW, TICES (7 categories), UICE, VICE == S00i_begin_ice_exf; sIceLoad (SEAICE_INIT_VARIA) in S00_begin.
+  - State == Fortran: every S00_begin field and the r* fields of G00 group R; the sea-ice state AREA, HEFF,
+    HSNOW, TICES (7 categories), UICE, VICE == S00i_begin_ice_exf; sIceLoad (SEAICE_INIT_VARIA) in S00_begin; the 28
+    EXF_FIELDS arrays of the full EXF_INIT_VARIA (M2.6b-2) == S00i_begin_ice_exf ('b' group) and S00_begin ('x'
+    group); DYN_CARRY == seaice_model.dyn_carry_init (== the SEAICE_DYNSOLVER entry values at iteration 1,
+    tests/test_seaice_model.py::test_carried_state_entry_values).
+`production()` (setup + state_from_pickup, ~4 min) is cached for the session: tests/test_step_full.py reuses it.
 Measured 2026-09-23 (16 CPU cores): bitwise, 0 differing values in every compared field, halos included.
 Negative controls: one pickup theta value * (1 + 1e-6) changes theta and totPhiHyd; one pickup_seaice HEFF value
 * (1 + 1e-6) changes HEFF and sIceLoad; SEAICE_rhoSnow * (1 + 1e-6) changes sIceLoad; without the doMapTice copy
@@ -15,6 +18,7 @@ TICES(2..7) fail; without the uIce/vIce vector exchange signs UICE/VICE fail.
 """
 
 import dataclasses
+import functools
 
 import jax
 import jax.numpy as jnp
@@ -26,7 +30,9 @@ from mitgcm_jax.grid.geometry import G2D, G3D, R3D, VROWS, grid_from_dump
 from mitgcm_jax.model import setup
 from mitgcm_jax.params_io import RunNamelists
 from mitgcm_jax.pkgs import ctrl as ctrl_mod
+from mitgcm_jax.pkgs import exf_full as exfb_mod
 from mitgcm_jax.pkgs import seaice_init as si_mod
+from mitgcm_jax.pkgs import seaice_model as sm_mod
 from mitgcm_jax.state import state_from_dump
 from mitgcm_jax.tests import oracle
 
@@ -35,8 +41,11 @@ ICE_STAGE = "S00i_begin_ice_exf"
 VERT = [n for n, _ in VROWS.values() if n != "dBdrRef"] + ["phiRef"]   # dBdrRef: not ported (grid/load.py)
 
 
-@pytest.fixture(scope="module")
-def run():
+@functools.lru_cache(maxsize=1)
+def production():
+    """model.setup(rundir) + init.state_from_pickup of the full oracle's run directory (the production path: grid from
+    the files, ctrl adjustments, pickups), with CTRL_INIT's smoothed controls recorded (negative controls below).
+    Cached for the pytest session (tests/test_step_full.py starts its production-path gate from it)."""
     rundir = oracle.run_dir(ORACLE)
     ds = oracle.dumpset(ORACLE)
     P, g, ex, kLowC = setup(rundir)
@@ -55,19 +64,48 @@ def run():
     return dict(rundir=rundir, ds=ds, P=P, g=g, ex=ex, kLowC=kLowC, st=st, aux=aux, ctrl_in=calls[-1])
 
 
+@pytest.fixture(scope="module")
+def run():
+    return production()
+
+
 def _eq(a, ref, name):
     np.testing.assert_array_equal(np.asarray(a), np.asarray(ref), err_msg=name)
 
 
 def test_setup_full_tree(run):
-    """Full tree: P.exf is the M2.6b hook (None); the ocean parameters take the full-tree branches."""
-    P = run["P"]
+    """Full tree: no flux-forced EXF (P.exf None) but the bulk-formula EXF (P.exfb) and the sea-ice parameters
+    (P.seaice); the ocean parameters take the full-tree branches; the grid carries the fixed sea-ice fields and the
+    zenith-angle factors (model.setup). A ModelParams mixing the trees is refused by forward_step."""
+    P, g = run["P"], run["g"]
     assert P.exf is None and P.ctrl is not None and P.ctrl.tim2d == ()
+    assert isinstance(P.exfb, exfb_mod.ExfFullParams) and isinstance(P.seaice, sm_mod.SeaiceParams)
     assert P.sf.useSEAICE and P.sf.zero_salt_plume_flux and not P.sf.temp_EvPrRn_set
     assert P.rs.mxl.calcMixLayerDepth
+    from mitgcm_jax.core.forward_step import ZS_KEYS, forward_step
+    assert set(si_mod.ICE_FIXED) <= set(g.f) and {"zs_" + k for k in ZS_KEYS} <= set(g.f)
     with pytest.raises(NotImplementedError):
-        from mitgcm_jax.core.forward_step import forward_step
-        forward_step(P, run["g"], run["ex"], run["kLowC"], run["st"], None)
+        forward_step(P._replace(seaice=None), g, run["ex"], run["kLowC"], run["st"], None)
+
+
+def test_tree_detection_and_override(run):
+    """The tree is detected from the namelists (spflxfile in data.exf: flux-forced) or declared (Nikolay 2026-09-23:
+    setup / state_from_pickup / run_jax --tree); a declaration contradicting the namelists is an error, raised before
+    any file is read."""
+    from mitgcm_jax.model import detect_tree, resolve_tree
+    nml_full, nml_ff = RunNamelists(run["rundir"]), RunNamelists(oracle.run_dir(oracle.FORCED))
+    assert detect_tree(nml_full) == "full" and detect_tree(nml_ff) == "ff"
+    assert resolve_tree(nml_full, "full") == "full" and resolve_tree(nml_ff, "ff") == "ff"
+    assert resolve_tree(nml_full) == "full" and resolve_tree(nml_ff, None) == "ff"
+    for nml, bad in ((nml_full, "ff"), (nml_ff, "full")):
+        with pytest.raises(ValueError, match="contradicts"):
+            resolve_tree(nml, bad)
+    with pytest.raises(ValueError, match="one of"):
+        resolve_tree(nml_full, "flux-forced")
+    with pytest.raises(ValueError, match="contradicts"):
+        setup(run["rundir"], tree="ff")
+    with pytest.raises(ValueError, match="contradicts"):
+        init.state_from_pickup(run["P"], run["g"], run["ex"], run["kLowC"], run["rundir"], tree="ff")
 
 
 def test_grid_and_ctrl_mixing_bitwise(run):
@@ -87,12 +125,20 @@ def test_init_full_bitwise(run):
     assert aux["pickup"].mom_StartAB == 1 and aux["pickup"].missing == ()
     assert float(aux["cg2dNorm"]) == P.cg.cg2dNorm
     ref = state_from_dump(ds, 1)
-    compare = sorted(set(ref.f) - set(init.EXF_FIELDS))
+    compare = sorted(ref.f)
     assert not set(compare) - set(st.f), sorted(set(compare) - set(st.f))
     for k in compare:
         _eq(st.f[k], ref.f[k], k)
     for k in si_mod.ICE_STATE:
         _eq(st.f[k], oracle.field(ds, 1, ICE_STAGE, k), k)
+    # the full EXF_INIT_VARIA arrays: 'b' group in S00i_begin_ice_exf, 'x' group in S00_begin (M2.6b-2)
+    for k in exfb_mod.EXF_ARRAYS:
+        stage = ICE_STAGE if (1, ICE_STAGE, k) in ds.index else "S00_begin"
+        _eq(st.f[k], oracle.field(ds, 1, stage, k), k)
+    for k, v in sm_mod.dyn_carry_init(run["g"].layout).items():
+        _eq(st.f[k], v, k)
+    extra = set(st.f) - set(ref.f) - set(exfb_mod.EXF_ARRAYS) - set(sm_mod.SEAICE_CARRIED)
+    assert not extra, sorted(extra)
     # not vacuous: ice present, the load non-zero, TICES categories copied, the production controls applied
     assert np.abs(np.asarray(st.f["sIceLoad"])).max() > 100.0 and np.asarray(st.f["AREA"]).max() > 0.5
     assert np.asarray(st.f["TICES"]).shape[1] == si_mod.NITD

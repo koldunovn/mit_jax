@@ -9,6 +9,8 @@ Constructors:
   - `state_from_dump(ds, it)`: the Fortran oracle's state at the start of iteration `it` (stage S00_begin, plus the
     r* fields of G00_geometry group R, which are dumped at the same point). Used by step gates and as the exact
     initial condition until the pickup/initialisation port (Task 8) is gated against it.
+  - `state_from_dump_full(ds, it)`: the same for the full V4r4 tree (plan M2.6b-2): plus the 'b' EXF_FIELDS arrays and
+    the sea-ice state of S00i_begin_ice_exf and the partly-written SEAICE_DYNSOLVER arrays (DYN_CARRY).
 """
 
 from dataclasses import dataclass
@@ -31,6 +33,11 @@ S00_FIELDS = ["uVel", "vVel", "wVel", "theta", "salt", "etaN", "etaH", "dEtaHdt"
               "aW2d", "aS2d", "aC2d", "pW", "pS", "pC",
               # EXF_FIELDS (group x): carried, their halos keep fldConst / exchanged values between steps
               "ustress", "vstress", "hflux", "sflux", "swflux", "apressure", "saltflx", "spflx"]
+# full tree: the EXF_FIELDS arrays of the 'b' dump group (stage S00i_begin_ice_exf); the 'x' group arrays (ustress,
+# vstress, hflux, sflux, swflux, apressure, saltflx) are in S00_FIELDS. Together: pkgs/exf_full.EXF_ARRAYS.
+S00I_EXF_FIELDS = ["uwind", "vwind", "wspeed", "wStress", "cw", "sw", "sh", "atemp", "aqh", "hs", "hl", "lwflux", "evap",
+                   "precip", "snowprecip", "swdown", "lwdown", "zen_albedo", "zen_fsol_diurnal", "zen_fsol_daily",
+                   "runoff"]
 # G00_geometry group R + recip_hFacW/S (time-dependent under z*)
 G00_STATE_FIELDS = ["rStarFacNm1C", "rStarFacNm1W", "rStarFacNm1S", "rStarExpC", "rStarExpW", "rStarExpS",
                     "rStarDhCDt", "rStarDhWDt", "rStarDhSDt", "pStarFacK", "etaHnm1", "hFac_surfC", "hFac_surfW",
@@ -83,4 +90,25 @@ def state_from_dump(ds, it, layout=None):
             pass
     for n in G00_STATE_FIELDS:
         f[n] = field(ds, it, "G00_geometry", n, L)
+    return State({k: np.asarray(v) for k, v in f.items()}, it)
+
+
+def state_from_dump_full(ds, it, layout=None):
+    """Full V4r4 tree: `state_from_dump` + S00I_EXF_FIELDS and the sea-ice state (AREA, HEFF, HSNOW, TICES, UICE,
+    VICE) of stage S00i_begin_ice_exf + DYN_CARRY (pkgs/seaice_model): the I01_dynsolver values of iteration it-1 when
+    that iteration is dumped (what SEAICE_DYNSOLVER left in the common blocks), else seaice_model.dyn_carry_init (the
+    SEAICE_INIT_VARIA values: exact at the model start, and bitwise-equivalent later because every point SEAICE_DYNSOLVER
+    reads is rewritten before it is read, tests/test_seaice_model.py::test_dyn_carry_reinit_equivalent)."""
+    from mitgcm_jax.pkgs import seaice_model as sm
+    from mitgcm_jax.tests.oracle import field
+
+    L = layout or Layout()
+    st = state_from_dump(ds, it, L)
+    f = dict(st.f)
+    for n in S00I_EXF_FIELDS + list(sm.ICE_STATE):
+        f[n] = field(ds, it, "S00i_begin_ice_exf", n, L)
+    if (it - 1, "I01_dynsolver", "e11") in ds.index:
+        f.update({n: field(ds, it - 1, "I01_dynsolver", n, L) for n in sm.DYN_CARRY})
+    else:
+        f.update({n: np.asarray(v) for n, v in sm.dyn_carry_init(L).items()})
     return State({k: np.asarray(v) for k, v in f.items()}, it)

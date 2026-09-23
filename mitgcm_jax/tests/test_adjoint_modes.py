@@ -2,7 +2,7 @@
 
 1. AdjointConfig.ecco from the flux-forced run's data.autodiff / data.pkg gives the TAF semantics of that build
    (docs/ADJOINT_MODES.md; STDOUT.0000 of the FORCED oracle prints useGGL90inAdMode=F, useSALT_PLUMEinAdMode=T,
-   useGMRediInAdMode=T, inAdExact=T, viscFacInAd=1).
+   useGMRediInAdMode=T, inAdExact=T, viscFacInAd=1); the published full-V4r4 namelists give the full-tree config.
 2. Seam census: the exact mode inserts no seam primitive; each switch adds exactly its own stop_gradient /
    custom_jvp_call equations to the traced step (so every seam is wired, and nothing else changes).
 3. Forward byte-identical: the step with EVERY switch on (GGL90 frozen, stable sigma, salt plume off, passive cg2d
@@ -52,9 +52,11 @@ def test_config_from_namelists(run):
     assert hash(ecco) == hash(AdjointConfig.ecco(nml))            # static: usable as a jit static argument
     with pytest.raises(ValueError):
         AdjointConfig(ggl90="off")
-    # the full V4r4 tree (useSEAICE=T) needs the sea-ice port: refused, not silently mapped
-    with pytest.raises(NotImplementedError, match="SEAICE"):
-        AdjointConfig.ecco(RunNamelists(FULL_V4R4_NAMELISTS))
+    assert ecco.seaice == "ecco" and AdjointConfig().seaice == "ecco"   # the sea-ice default (no sea ice here)
+    # the full V4r4 tree (useSEAICE=T, plan M2.6b-2): its data.autodiff switches sea ice, GGL90 and the salt plume
+    # off in the adjoint (tests/test_adjoint_modes_full.py gates the full-tree seams)
+    assert AdjointConfig.ecco(RunNamelists(FULL_V4R4_NAMELISTS)) == AdjointConfig(
+        ggl90="frozen", gm_sigma="stable", salt_plume="off", cg2d="passive", visc_fac_in_ad=1.0, seaice="ecco")
 
 
 def _census(run, adj):

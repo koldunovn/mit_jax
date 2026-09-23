@@ -160,7 +160,8 @@ def step_after_dynamics(p: FreeSurfParams, cp: _cg2d.Cg2dParams, g, ex, s):
     s: dict with gU, gV (after DYNAMICS), uVel, vVel, wVel, etaN, etaH, dEtaHdt, EmPmR, rStarFacC/W/S,
     recip_hFacC/W/S, pW, pS, pC, Bo_surf, recip_Bo. Returns a dict with every field these routines write (the r*
     fields of CALC_R_STAR, hFac*, recip_hFac*, aW2d..pC, etaN, etaH, etaHnm1, dEtaHdt, PmEpR, uVel, vVel, wVel) and
-    `cg2d` (solver diagnostics) and `rstar_checks` (calc_r_star.F:182-202 counters).
+    `cg2d` (solver diagnostics), `rstar_checks` (calc_r_star.F:182-202 counters) and `stages` (the values at the dump
+    stages S06-S11, C01/C02: what each call wrote; records only, no extra computation).
     """
     out = {}
     hFacC, hFacW, hFacS, rhC, rhW, rhS = update_r_star(                        # forward_step.F:855
@@ -176,6 +177,16 @@ def step_after_dynamics(p: FreeSurfParams, cp: _cg2d.Cg2dParams, g, ex, s):
                            s["wVel"])                                           # :965
     rs = calc_r_star(p, g, ex, ic["etaH"], s["rStarFacC"], s["rStarFacW"], s["rStarFacS"])  # :980
     out["rstar_checks"] = {k: rs.pop(k) for k in ("icntc1", "icntw", "icnts", "icntc2", "maxhFacC")}
+    out["stages"] = {
+        "S06_update_rstar_T": dict(hFacC=hFacC, hFacW=hFacW, hFacS=hFacS, recip_hFacC=rhC),
+        "S07_update_cg2d": dict(zip(("aW2d", "aS2d", "aC2d", "pW", "pS", "pC"), ops)),
+        "C01_cg2d_inputs": dict(zip(("aW2d", "aS2d", "aC2d", "pW", "pS", "pC"), ops), cg2d_b=info["cg2d_b"],
+                                cg2d_x=info["cg2d_x0"]),
+        "C02_cg2d_solution": dict(cg2d_x=info["x_fortran"]),
+        "S08_solve_for_pressure": dict(etaN=etaN),
+        "S09_momentum_correction": dict(uVel=uVel, vVel=vVel),
+        "S10_integr_continuity": {k: ic[k] for k in ("wVel", "etaN", "etaH", "dEtaHdt")},
+        "S11_calc_rstar": dict(rs)}
     out.update(rs)
     uVel, vVel, wVel = do_stagger_fields_exchanges(ex, uVel, vVel, ic["wVel"])  # :1015
     out.update(dEtaHdt=ic["dEtaHdt"], PmEpR=ic["PmEpR"], etaN=ic["etaN"], etaH=ic["etaH"], etaHnm1=ic["etaHnm1"],

@@ -70,6 +70,8 @@ MANIFEST = {
     "mitgcm_jax/tests/test_external_forcing_full.py": "tier1x",
     "mitgcm_jax/tests/test_init_full.py": "tier1x",
     "mitgcm_jax/tests/test_seaice_model.py": "tier1x",
+    "mitgcm_jax/tests/test_step_full.py": "tier1x",
+    "mitgcm_jax/tests/test_adjoint_modes_full.py": "tier1x",
 }
 
 # Directories searched for test files (must match pyproject testpaths).

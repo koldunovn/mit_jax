@@ -29,6 +29,7 @@ import numpy as np
 import pytest
 
 from mitgcm_jax.adjoint import checkpoint as ck
+from mitgcm_jax.adjoint.modes import EXACT
 from mitgcm_jax.diagnostics import budgets as bd
 from mitgcm_jax.diagnostics import means as mn
 from mitgcm_jax.diagnostics.monitor import dynstat_device
@@ -65,7 +66,7 @@ def run():
     st0 = State({k: jnp.asarray(v) for k, v in st.f.items()}, jnp.asarray(1))
     xs = ck.exf_window(ck.exf_loader_at(P, g, rundir, nml, 1), nml, 1, NSTEPS)
     model = ck.Model(P, g, kLowC, ex)
-    step = ck.make_step()
+    step = ck.make_step(EXACT)   # forward only (the exact config: no seam)
     st0 = ck.prepare_state(step, model, st0, jax.tree.map(lambda a: a[0], xs))
     step_jit = jax.jit(step)
     sts = [st0]

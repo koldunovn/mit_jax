@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
-"""Run the JAX MITgcm (V4r4 flux-forced) forward model and write movie frames, %MON statistics and snapshots.
+"""Run the JAX MITgcm (V4r4, flux-forced or full tree) forward model and write movie frames, %MON statistics and
+snapshots.
 
     python scripts/run_jax.py OUTDIR --rundir RUNDIR --init-oracle NAME [--init-it 1] --nsteps N
                               [--frame-every 6] [--monitor-every 1] [--snapshot-every 24]
 
 RUNDIR: a Fortran run directory with the namelists and linked inputs (forcing files) of the configuration to run.
+The tree is detected from the namelists as model.setup does (model.detect_tree) -- flux-forced (read fluxes) or full
+(bulk-formula EXF + sea ice, plan M2.6b-2: ExfFullRecordLoader + zenith_time on the host every step) -- or declared with
+--tree ff|full (an error if the namelists imply the other tree).
 Initial state: --init-oracle pickup = built from the run directory's pickup like the Fortran initialisation
 (mitgcm_jax/init.py, incl. the useCTRL=T control adjustments); or an oracle name = its S00_begin dump at --init-it. OUTDIR (new) gets:
-  frames/frame_<n>.npz   sst (compact 1170x90), eta, iter, date   -> tools/animate_globe.py (nereus env)
-  monitor.txt            %MON dynstat lines in the Fortran format (compare with STDOUT.0000)
+  frames/frame_<n>.npz   sst (compact 1170x90), eta, iter, date (full tree: + area, heff)   -> tools/animate_globe.py
+  monitor.txt            %MON dynstat lines in the Fortran format (compare with STDOUT.0000: tools/compare_monitor.py);
+                         full tree also the SEAICE_MONITOR (seaice_*) block of each monitored state and the
+                         EXF_MONITOR (exf_*) block of each step, placed as in STDOUT.0000 (after the state block of the
+                         step's start iteration)
   snap_<iter>.npz        theta, salt, etaN (compact, float32) every --snapshot-every steps (dumpFreq twin)
   state_final.npz        the full State (restart)
   means_<iter>.npz       with --means-every N: time means of theta, salt, etaN, uVel, vVel, sst (compact, float32)
@@ -34,12 +41,14 @@ import mitgcm_jax  # noqa: E402,F401
 from mitgcm_jax.core.forward_step import forward_step  # noqa: E402
 from mitgcm_jax.diagnostics import budgets as budgets_mod  # noqa: E402
 from mitgcm_jax.diagnostics import means as means_mod  # noqa: E402
-from mitgcm_jax.diagnostics.monitor import dynstat, dynstat_device, format_dynstat  # noqa: E402
+from mitgcm_jax.diagnostics.monitor import (EXF_MON, dynstat, dynstat_device, exf_stats, format_dynstat,  # noqa: E402
+                                            format_stats, seaice_stats)
 from mitgcm_jax.io.llc import tiles_to_compact  # noqa: E402
 from mitgcm_jax.model import setup  # noqa: E402
 from mitgcm_jax.params_io import RunNamelists  # noqa: E402
 from mitgcm_jax.pkgs import exf_fluxforced as exf_mod  # noqa: E402
-from mitgcm_jax.state import State, state_from_dump  # noqa: E402
+from mitgcm_jax.pkgs import exf_full as exfb_mod  # noqa: E402
+from mitgcm_jax.state import State, state_from_dump, state_from_dump_full  # noqa: E402
 from mitgcm_jax.tests import oracle  # noqa: E402
 
 
@@ -85,6 +94,8 @@ def main(argv=None):
     ap.add_argument("--means-fields", default=",".join(means_mod.MEAN_FIELDS),
                     help="comma-separated fields for --means-every (State fields, or sst)")
     ap.add_argument("--budgets", action="store_true", help="per-step global budgets to budgets.txt")
+    ap.add_argument("--tree", choices=("ff", "full"), default=None,
+                    help="declare the V4r4 tree (default: detect from the namelists; a contradiction is an error)")
     a = ap.parse_args(argv)
     out = Path(a.outdir)
     out.mkdir(parents=True, exist_ok=False)
@@ -101,13 +112,23 @@ def main(argv=None):
 
     say(f"run_jax: {' '.join(sys.argv)}  devices={jax.devices()}")
     t0 = time.time()
-    P, g, ex, kLowC = setup(rundir)
+    P, g, ex, kLowC = setup(rundir, tree=a.tree)
     if a.cg2d_unroll != 1:
         import dataclasses
         P = P._replace(cg=dataclasses.replace(P.cg, sum_unroll=a.cg2d_unroll))
     L = g.layout
-    loader = exf_mod.ExfRecordLoader(P.exf, g, rundir)
+    full = P.exfb is not None                          # full V4r4 tree (model.setup): bulk-formula EXF + sea ice
+    say(f"tree: {'full (EXF bulk formulae + SEAICE_MODEL)' if full else 'flux-forced'}")
+    loader = exfb_mod.ExfFullRecordLoader(P.exfb, g, rundir) if full else exf_mod.ExfRecordLoader(P.exf, g, rundir)
     nIter0 = int(nml.get("data", "parm03", "nIter0", default=0))
+
+    def exf_inputs(myTime, myIter):
+        """Host-side EXF inputs of the step (records; full tree: + the date-only zenith-angle scalars)."""
+        bufs, facs, _ = loader.load(myTime, myIter)
+        e = {"bufs": bufs, "facs": facs, "myTime": myTime}
+        if full:
+            e["zt"] = exfb_mod.zenith_time(P.exfb, myTime, myIter)
+        return e
     if a.restart:
         z = np.load(a.restart)
         a.init_it = int(z["it"])
@@ -116,25 +137,50 @@ def main(argv=None):
         # logic for the steps before the restart (reads only the records it needs, no model work)
         for it in range(nIter0, a.init_it):
             loader.load(*exf_mod.model_time(nml, it - nIter0 + 1))
+        if full and "PmEpR" not in z.files:
+            st = st.add(PmEpR=jax.numpy.zeros(L.shape2d))
         say(f"restart from {a.restart} at it={a.init_it}")
     elif a.init_oracle == "pickup":
         from mitgcm_jax.init import state_from_pickup   # plan Task 8/8b: from the run dir's pickup (+ ctrl)
-        st = state_from_pickup(P, g, ex, kLowC, rundir)
+        st = state_from_pickup(P, g, ex, kLowC, rundir, tree=a.tree)
         a.init_it = int(st.it)
         st = State({k: jax.numpy.asarray(v) for k, v in st.f.items()}, jax.numpy.asarray(a.init_it))
     else:
         ds = oracle.dumpset(a.init_oracle)
-        st = state_from_dump(ds, a.init_it)
-        st = st.add(runoff=np.asarray(exf_mod.exf_init_varia(P.exf, L)["runoff"]))
+        if full:
+            st = state_from_dump_full(ds, a.init_it, L)
+        else:
+            st = state_from_dump(ds, a.init_it)
+            st = st.add(runoff=np.asarray(exf_mod.exf_init_varia(P.exf, L)["runoff"]))
         st = State({k: jax.numpy.asarray(v) for k, v in st.f.items()}, jax.numpy.asarray(a.init_it))
+    if full:   # strongly typed (jnp.full in the initialisation gives weak float64: a second compiled program)
+        st = State({k: jax.numpy.asarray(v, dtype=v.dtype) for k, v in st.f.items()}, st.it)
+    if full and "PmEpR" not in st.f:
+        # written (EXTERNAL_FORCING_SURF, INTEGR_CONTINUITY) before any read in every step and returned by forward_step:
+        # present from the start, every step runs one compiled program
+        st = st.add(PmEpR=jax.numpy.zeros(L.shape2d))
     say(f"setup + initial state {time.time() - t0:.1f} s")
-    step = jax.jit(lambda P, g, kLowC, st, exf_in: forward_step(P, g, ex, kLowC, st, exf_in)[0])
+    if full:
+        # the EXF arrays as EXF_MONITOR sees them in the step (forward_step aux["exf_monitor"]), 2-D: cheap to return
+        step = jax.jit(lambda P, g, kLowC, st, exf_in: (lambda r: (r[0], {k: r[1]["exf_monitor"][k] for k in EXF_MON}))(
+            forward_step(P, g, ex, kLowC, st, exf_in)))
+    else:
+        step = jax.jit(lambda P, g, kLowC, st, exf_in: (forward_step(P, g, ex, kLowC, st, exf_in)[0], None))
     mon_dev = jax.jit(dynstat_device)
 
     def monitor(st):
         if a.host_monitor:
             return dynstat(st, g, L)
         return jax.tree_util.tree_map(float, mon_dev(st, g))
+
+    def monitor_block(st, it, myTime):
+        """time_tsnumber block: dynstat (+ the SEAICE_MONITOR block, full tree), as the Fortran's MONITOR and
+        SEAICE_OUTPUT print them for the state at the start of iteration it. Returns (text, dynstat stats)."""
+        stats = monitor(st)
+        txt = format_dynstat(stats, it)
+        if full:
+            txt += "\n" + format_stats("seaice", seaice_stats(st, g, L), it, myTime)
+        return txt, stats
     mon = open(out / "monitor.txt", "w")
     if a.means_every:
         mean_fields = tuple(f for f in a.means_fields.split(",") if f)
@@ -151,26 +197,36 @@ def main(argv=None):
         sst = tiles_to_compact(interior(st.theta[:, 0], L)).astype(np.float32)
         eta = tiles_to_compact(interior(st.etaN, L)).astype(np.float32)
         date = model_date(nml, myTime)
+        ice = {}
+        if full:   # sea-ice concentration and effective thickness (SEAICE.h AREA, HEFF)
+            ice = {k.lower(): tiles_to_compact(interior(st.f[k], L)).astype(np.float32) for k in ("AREA", "HEFF")}
         np.savez(out / "frames" / f"frame_{n:05d}.npz", sst=sst, eta=eta, iter=it,
-                 date=date.strftime("%Y-%m-%d %H:%M"))
+                 date=date.strftime("%Y-%m-%d %H:%M"), **ice)
 
     # myTime of the state at the start of iteration it: startTime + (it - nIter0)*deltaT
     t_state = exf_mod.model_time(nml, a.init_it - nIter0 + 1)[0]
     nframe = a.frame_offset
+    monitored = set()
     if not a.restart:
         frame(nframe, st, t_state)
-        mon.write(format_dynstat(monitor(st), a.init_it) + "\n")
+        mon.write(monitor_block(st, a.init_it, t_state)[0] + "\n")
+        monitored.add(a.init_it)
         nframe += 1
     tstep = []
     for n in range(a.nsteps):
         it = a.init_it + n
         myTime, myIter = exf_mod.model_time(nml, it - nIter0 + 1)
-        bufs, facs, _ = loader.load(myTime, myIter)
+        exf_in = exf_inputs(myTime, myIter)
         t1 = time.time()
         st_prev = st
-        st = step(P, g, kLowC, st, {"bufs": bufs, "facs": facs, "myTime": myTime})
+        st, exf_mon = step(P, g, kLowC, st, exf_in)
         jax.block_until_ready(st.f["theta"])
         tstep.append(time.time() - t1)
+        if full and it in monitored:
+            # EXF_MONITOR of this step (exf_getforcing.F:296, myIter = it): printed inside the step, i.e. after the
+            # monitor block of iteration it and before that of it + 1
+            mon.write(format_stats("exf", exf_stats({k: np.asarray(v) for k, v in exf_mon.items()}, g, L), it,
+                                   myTime) + "\n")
         if a.budgets:
             b = bud(P, g, kLowC, st_prev, st)
             bacc = budgets_mod.budget_acc_add(bacc, b)
@@ -187,9 +243,10 @@ def main(argv=None):
                 macc, m_first = means_mod.means_init(st, mean_fields), it + 2
         t_state = exf_mod.model_time(nml, it + 1 - nIter0 + 1)[0]
         if (it + 1) % a.monitor_every == 0:
-            stats = monitor(st)
-            mon.write(format_dynstat(stats, it + 1) + "\n")
+            txt, stats = monitor_block(st, it + 1, t_state)
+            mon.write(txt + "\n")
             mon.flush()
+            monitored.add(it + 1)
             th = stats["theta"]
             say(f"it {it + 1:6d} {model_date(nml, t_state):%Y-%m-%d %H:%M} step {tstep[-1]:.2f} s  "
                 f"theta mean {th['mean']:.10f} max {th['max']:.4f}  eta [{stats['eta']['min']:.3f}, "

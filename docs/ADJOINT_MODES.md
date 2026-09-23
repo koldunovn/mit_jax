@@ -17,18 +17,21 @@ lists the one reading that a TAF build could confirm.
 | GGL90 | `useGGL90inAdMode = .FALSE.` (ff `namelist/data.autodiff:11`) | GGL90 is skipped in the reverse sweep, recomputations included. The total vertical diffusivity and viscosity reach the adjoint from the tape, stored **after** the GGL90 terms were added. The implicit solves are therefore linearised with the forward (GGL90-inclusive) coefficients, and no derivative flows through the TKE or the coefficients' dependence on the state. | `ggl90="frozen"`: `stop_gradient` on the four GGL90_CALC outputs (TKE, viscArU, viscArV, diffKr) | `frozen` |
 | GM/Redi slopes | `GMREDI_WITH_STABLE_ADJOINT` (ff `GMREDI_OPTIONS.h:21`) | `ZERO_ADJ_LOC` zeroes the adjoint of sigmaX/Y/R. No reader of sigma passes a derivative back (GMREDI tensor, GGL90 N², CALC_IVDC). rhoInSitu keeps its derivative. | `gm_sigma="stable"`: `stop_gradient` on sigmaX/Y/R after GRAD_SIGMA | `stable` |
 | GM/Redi package | `useGMRediInAdMode` not set (default `.TRUE.`) | GM/Redi differentiated, apart from the sigma cut above | none (unported alternative: `NotImplementedError`) | kept |
-| salt plume | ff: `useSALT_PLUMEinAdMode = .TRUE.` (`data.autodiff:12`); full: `.FALSE.` | ff: exact. Full tree: every `IF (useSALT_PLUME)` block is skipped in the reverse sweep, so no derivative flows through saltPlumeFlux or saltPlumeDepth. | `salt_plume="exact"` or `"off"` (`stop_gradient` on saltPlumeFlux at DO_OCEANIC_PHYS entry and on saltPlumeDepth) | `exact` (ff) |
-| sea ice | ff: `useSEAICE` unset (F). Full: `useSEAICEinAdMode = .FALSE.`, `SEAICEapproxLevInAd = 0`, so no SEAICE_FAKE. | ff: nothing to do. Full: no sea-ice adjoint at all. | not ported (`NotImplementedError` for `useSEAICE=T`) | — |
+| salt plume | ff: `useSALT_PLUMEinAdMode = .TRUE.` (`data.autodiff:12`); full: `.FALSE.` | ff: exact. Full tree: every `IF (useSALT_PLUME)` block is skipped in the reverse sweep, so no derivative flows through saltPlumeFlux or saltPlumeDepth. | `salt_plume="exact"` or `"off"` (`stop_gradient` on saltPlumeFlux at DO_OCEANIC_PHYS entry -- full tree: on SEAICE_MODEL's output, section 3.4 -- and on saltPlumeDepth) | `exact` (ff), `off` (full) |
+| sea ice | ff: `useSEAICE` unset (F). Full: `useSEAICEinAdMode = .FALSE.`, `SEAICEapproxLevInAd = 0`, so no SEAICE_FAKE. | ff: nothing to do. Full: SEAICE_MODEL skipped in the reverse sweep: identity on what it overwrites, nothing to what it only reads. | `seaice="ecco"` (default everywhere) \| `"no_dynamics"` \| `"full"` (M2.6b; section 3.4) | `ecco` (full) |
 | KPP | not used | — | refused if used | — |
 | viscFacInAd | not set, so 1.0 (`autodiff_readparms.F:73`; STDOUT prints `1.0E+00`) | Adjoint of MOM_VECINV with the viscosities recomputed at `viscFacAdj = viscFacInAd` (the 3-D file fields are scaled before clipping). With 1.0 this equals the exact adjoint. | `visc_fac_in_ad`: `differentiate_at` around MOM_VECINV | `1.0` |
 | cg2d | `pkg/autodiff/cg2d.flow:7-12` | Hand-written adjoint: CG2D applied to the adjoint right-hand side. The operator aW2d/aS2d/aC2d is passive. | `cg2d="passive"`: `Cg2dParams.stop_coeff_grad` | `passive` |
 | inAdExact | not set (default `.TRUE.`) | `inAdMode` stays `.FALSE.` in the reverse sweep. It would only change DST3 flux-limited advection, which V4r4 does not use. | refused if `.FALSE.` | — |
 
 `AdjointConfig.ecco(RunNamelists(rundir))` builds the last column from the run's `data.autodiff` and `data.pkg`. For the
+full V4r4 tree (M2.6b-2) it returns `AdjointConfig(ggl90='frozen', gm_sigma='stable', salt_plume='off', cg2d='passive',
+visc_fac_in_ad=1.0, seaice='ecco')` (the full oracle's STDOUT.0000 prints useSEAICEinAdMode = useGGL90inAdMode =
+useSALT_PLUMEinAdMode = F; code/GMREDI_OPTIONS.h:21 defines GMREDI_WITH_STABLE_ADJOINT as in the ff tree). For the
 FORCED oracle it returns `AdjointConfig(ggl90='frozen', gm_sigma='stable', salt_plume='exact', cg2d='passive',
-visc_fac_in_ad=1.0)`, and its STDOUT.0000 prints the matching values (`useGGL90inAdMode = F`,
+visc_fac_in_ad=1.0)` (seaice 'ecco', unused without sea ice), and its STDOUT.0000 prints the matching values (`useGGL90inAdMode = F`,
 `useSALT_PLUMEinAdMode = T`, `useGMRediInAdMode = T`, `useKPPinAdMode = F`, `useSEAICEinAdMode = F`, `inAdExact = T`,
-`viscFacInAd = 1.0E+00`). `AdjointConfig()` (the default) is the exact mode and inserts no seam. Its traced step is
+`viscFacInAd = 1.0E+00`). `AdjointConfig()` (the default) is the exact mode and inserts no ocean seam (its sea-ice level is `"ecco"`, which acts only in the full tree). Its traced step is
 character-for-character the jaxpr of the pre-Task-17 `forward_step` (checked against `git show HEAD:` of that file).
 
 ## 2. The mechanism: which values the reverse sweep uses
@@ -148,8 +151,18 @@ cost there is no effect, because within one step θ does not depend on the plume
 `useSEAICEinAdMode = .FALSE.` switches the package off in the reverse sweep. `SEAICEapproxLevInAd` becomes
 `MIN(0, 0) = 0` (`autodiff_readparms.F:124-125`), and `ADAUTODIFF_INADMODE_SET:51` sets `SEAICEadjMODE = 0`. So
 `SEAICE_FAKE`, which needs `SEAICEadjMODE = -1` (ff `do_oceanic_phys.F:383`), does not run either: the full-V4r4
-adjoint has no sea-ice sensitivity at all. The ff run has `useSEAICE = F`. `AdjointConfig.ecco` refuses `useSEAICE=T`
-until the sea-ice port (M2).
+adjoint has no sea-ice sensitivity at all. The ff run has `useSEAICE = F`.
+
+JAX (M2.6b): `AdjointConfig.seaice`, default `"ecco"` in every configuration (Nikolay, 2026-09-23), including the
+otherwise exact `AdjointConfig()`: SEAICE_MODEL wrapped in `ops/ad_skip.skipped_in_reverse` (a linear custom_jvp:
+identity VJP on the variables it overwrites, zero on those it only reads; forward byte-identical). `"no_dynamics"`
+(SEAICEuseDYNAMICSswitchInAd semantics) and `"full"` (exact, LSR implicit derivative) are explicit choices
+(pkgs/seaice_model.py). The seam sits at the SEAICE_MODEL call in `forward_step.do_oceanic_phys`.
+Salt plume in the full tree: saltPlumeFlux is zeroed at c66g do_oceanic_phys.F:293 and set by SEAICE_GROWTH (V4r4
+seaice_growth.F:2032, under `#ifdef ALLOW_SALT_PLUME` only), and every reader is an `IF (useSALT_PLUME)` block, so the
+`salt_plume="off"` stop_gradient sits on SEAICE_MODEL's saltPlumeFlux output (before SALT_PLUME_DO_EXCH) rather than
+on the entry value. With `seaice="ecco"` that flux seam is redundant (measured: d surfaceForcingS / d salt bitwise the
+same with and without it); only the saltPlumeDepth seam changes derivatives there (tests/test_adjoint_modes_full.py).
 
 ### 3.5 viscFacInAd
 The V4r4 `mom_calc_visc.F:406,425,516,535` add `viscFacAdj*visc{Ah,A4}{D,Z}fld` to the linear viscosity before the
@@ -200,9 +213,17 @@ solve runs to 1e-13 from zero (`Cg2dParams.adj_tolerance`).
 
 ```python
 from mitgcm_jax.adjoint.modes import AdjointConfig
-adj = AdjointConfig.ecco(RunNamelists(rundir))        # or AdjointConfig() (exact, default)
+adj = AdjointConfig.ecco(RunNamelists(rundir))        # or AdjointConfig() (exact ocean; sea ice "ecco")
 st1, aux = forward_step(P, g, ex, kLowC, st0, exf_in, adj=adj)   # adj is static: close over it
 ```
+
+**Default gradient semantics = ECCO (Nikolay, 2026-09-23); exact available.** The gradient drivers default to the
+run's `AdjointConfig.ecco(nml)` (flux-forced or full tree; sea ice `"ecco"`): `adjoint/checkpoint.make_step(nml=...)`
+(no config and no namelists is an error, so the choice is never silent) and `scripts/adjoint/multiweek_grad.py`
+(`--mode ecco` by default). The exact adjoint is `make_step(AdjointConfig())` / `--mode exact`; any other
+`AdjointConfig` can be passed. `AdjointConfig()` itself stays the explicit exact configuration (the tests of the exact
+gradient, dot tests and FD checks use it: test_checkpoint.py, test_budgets.py pass it explicitly). The sea-ice level is
+`"ecco"` in every configuration unless set (`seaice="no_dynamics"` or `"full"` are explicit).
 
 Seams, all in `core/forward_step.py` (none changes a forward value):
 - `do_oceanic_phys`:

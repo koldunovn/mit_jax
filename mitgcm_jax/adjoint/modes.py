@@ -43,8 +43,32 @@ Switches (value in the ECCO mode of the V4r4 flux-forced build; each seam sits i
               viscosities, derivatives (JVP and VJP) at the viscosities of MOM_CALC_VISC with viscFacAdj=viscFacInAd.
               None = no seam; 1.0 = seam present, derivatives bitwise equal to the exact mode (tested).
 
-Not switches here: sea ice (useSEAICE = F in the flux-forced run; the full-V4r4 useSEAICEinAdMode = F waits for the
-sea-ice port, M2), KPP (not used), GMRedi in the adjoint (useGMRediInAdMode = T, default), inAdExact (= T, default:
+  seaice      "ecco" | "no_dynamics" | "full"   (full V4r4 tree only; ignored by the flux-forced step, which has no sea
+              ice). DEFAULT "ecco", also in the otherwise exact `AdjointConfig()` (Nikolay, 2026-09-23: the ECCO semantics
+              is the sea-ice default everywhere; the exact sea-ice adjoint is an explicit choice, seaice="full").
+              "ecco" = data.autodiff useSEAICEinAdMode = .FALSE. (the V4r4 setting): autodiff_inadmode_set_ad.F:37
+              useSEAICE = .FALSE. in the reverse sweep, so the IF (useSEAICE) block around SEAICE_MODEL
+              (c66g do_oceanic_phys.F:397-481) is skipped: the adjoint of SEAICE_MODEL is the identity on every variable
+              it overwrites and adds nothing to those it only reads (NOT a stop_gradient); SEAICEapproxLevInAd =
+              MIN(0, 0) = 0 (autodiff_readparms.F:124-125), so SEAICE_FAKE (needs -1) is not called either.
+              "no_dynamics" = useSEAICEinAdMode = .TRUE. with SEAICEuseDYNAMICSswitchInAd = .TRUE.
+              (autodiff_inadmode_set_ad.F:49-51): only the IF (SEAICEuseDYNAMICS) blocks (FREEDRIFT + LSR, clipping) are
+              skipped in the reverse sweep. "full" = the exact derivative (LSR by its implicit derivative).
+              Mechanism and tests: pkgs/seaice_model.py (ops/ad_skip.skipped_in_reverse); the seam sits at the
+              SEAICE_MODEL call in core/forward_step.do_oceanic_phys.
+
+Full V4r4 tree (`ecco()` of its data.autodiff: useSEAICEinAdMode = useGGL90inAdMode = useSALT_PLUMEinAdMode =
+.FALSE.; code/GMREDI_OPTIONS.h:21 GMREDI_WITH_STABLE_ADJOINT as in the flux-forced tree): seaice "ecco", ggl90
+"frozen", salt_plume "off", gm_sigma "stable", cg2d "passive", visc_fac_in_ad 1.0 (STDOUT.0000 of full_jaxdump_v5
+prints exactly these switch values). The salt-plume seam sits where the full tree's saltPlumeFlux is SET: c66g
+do_oceanic_phys.F:293 zeroes it (ALLOW_AUTODIFF, no IF (useSALT_PLUME)), V4r4 SEAICE_GROWTH writes it (seaice_growth.F:
+2032, only #ifdef ALLOW_SALT_PLUME: its adjoint runs but receives 0), and every reader is an IF (useSALT_PLUME) block
+the reverse sweep skips (SALT_PLUME_DO_EXCH do_oceanic_phys.F:573-576, SALT_PLUME_FORCING_SURF external_forcing_surf.F:
+235-239, SALT_PLUME_TENDENCY_APPLY_S apply_forcing.F:931-936), so the stop_gradient goes on SEAICE_MODEL's
+saltPlumeFlux output (before SALT_PLUME_DO_EXCH) instead of the DO_OCEANIC_PHYS entry value (which the full tree zeroes),
+plus the same one on SALT_PLUME_CALC_DEPTH's output (c66g do_oceanic_phys.F:941-944).
+
+Not switches here: KPP (not used), GMRedi in the adjoint (useGMRediInAdMode = T, default), inAdExact (= T, default:
 inAdMode stays .FALSE. in the reverse sweep, autodiff_readparms.F:98-104). Settings that would need an unported
 branch raise NotImplementedError in `AdjointConfig.ecco`.
 
@@ -61,11 +85,12 @@ from typing import Optional
 import jax
 from jax import lax
 
-# flux-forced/code/GMREDI_OPTIONS.h:21  #define GMREDI_WITH_STABLE_ADJOINT  (ZERO_ADJ_LOC on sigmaX/Y/R in the adjoint)
+# flux-forced/code/GMREDI_OPTIONS.h:21 = full code/GMREDI_OPTIONS.h:21 (the two files are identical)
+#   #define GMREDI_WITH_STABLE_ADJOINT  (ZERO_ADJ_LOC on sigmaX/Y/R in the adjoint)
 GMREDI_WITH_STABLE_ADJOINT = True
 
 _CHOICES = {"ggl90": ("exact", "frozen"), "gm_sigma": ("exact", "stable", "gm_only"), "salt_plume": ("exact", "off"),
-            "cg2d": ("exact", "passive")}
+            "cg2d": ("exact", "passive"), "seaice": ("ecco", "no_dynamics", "full")}
 
 
 @dataclass(frozen=True)
@@ -76,6 +101,7 @@ class AdjointConfig:
     salt_plume: str = "exact"
     cg2d: str = "exact"
     visc_fac_in_ad: Optional[float] = None
+    seaice: str = "ecco"       # the ECCO sea-ice adjoint is the default even here (module docstring)
 
     def __post_init__(self):
         for name, allowed in _CHOICES.items():
@@ -86,6 +112,7 @@ class AdjointConfig:
 
     @property
     def is_exact(self):
+        """True for the default configuration: no ocean seam; the sea-ice level is the default "ecco"."""
         return self == AdjointConfig()
 
     @classmethod
@@ -108,22 +135,29 @@ class AdjointConfig:
             raise NotImplementedError("inAdExact = .FALSE. (inAdMode branches) is not ported")
         if pkg("useKPP"):
             raise NotImplementedError("useKPP: pkg/kpp is not ported")
-        if pkg("useSEAICE"):
-            raise NotImplementedError("useSEAICE: sea ice and useSEAICEinAdMode / SEAICE_FAKE are M2 (not ported)")
         useGMRedi, useGGL90, useSALT_PLUME = pkg("useGMRedi"), pkg("useGGL90"), pkg("useSALT_PLUME")
         if useGMRedi and not ad("useGMRediInAdMode", True):  # autodiff_readparms.F:67
             raise NotImplementedError("useGMRediInAdMode = .FALSE. (GM/Redi off in the adjoint) is not ported")
         ggl_in_ad = ad("useGGL90inAdMode", True) and useGGL90  # autodiff_readparms.F:69, 119
         sp_in_ad = ad("useSALT_PLUMEinAdMode", True) and useSALT_PLUME  # autodiff_readparms.F:70, 120
-        for key in ("SEAICEuseFREEDRIFTswitchInAd", "SEAICEuseDYNAMICSswitchInAd"):  # autodiff_readparms.F:76-77
-            if ad(key, False):
-                raise NotImplementedError(f"{key}: sea ice is not ported")
+        if pkg("useSEAICE"):
+            # useSEAICEinAdMode .AND. useSEAICE (autodiff_readparms.F:68, 118), SEAICEuseDYNAMICSswitchInAd (:77),
+            # SEAICEapproxLevInAd (:72, 124-127); unported settings raise there (pkgs/seaice_model.ad_level)
+            from mitgcm_jax.pkgs.seaice_model import ad_level
+            seaice = ad_level(nml)
+        else:
+            # no sea ice in this build/run: the switches act only inside IF (useSEAICE) code (the field is unused)
+            for key in ("SEAICEuseFREEDRIFTswitchInAd", "SEAICEuseDYNAMICSswitchInAd"):  # autodiff_readparms.F:76-77
+                if ad(key, False):
+                    raise NotImplementedError(f"{key} set with useSEAICE = .FALSE.")
+            seaice = "ecco"
         return cls(
             ggl90="frozen" if (useGGL90 and not ggl_in_ad) else "exact",
             gm_sigma="stable" if (useGMRedi and GMREDI_WITH_STABLE_ADJOINT) else "exact",
             salt_plume="off" if (useSALT_PLUME and not sp_in_ad) else "exact",
             cg2d="passive",  # pkg/autodiff/cg2d.flow:7-12 (every TAF build)
             visc_fac_in_ad=float(ad("viscFacInAd", 1.0)),  # autodiff_readparms.F:73
+            seaice=seaice,
         )
 
 
