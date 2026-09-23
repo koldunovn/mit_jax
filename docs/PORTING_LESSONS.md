@@ -351,3 +351,14 @@ Production runs may use XLA defaults (ulp-level differences only).
 - ecco mode (open for Nikolay): with useSEAICEinAdMode=F TAF skips the IF(useSEAICE) blocks in the reverse sweep, so
   adjoints of what sea ice overwrote (Qnet, EmPmR, saltFlux) pass through as if the package were the identity — not a
   stop_gradient. The kernel gives the exact derivative for now.
+
+## M2.1-2 — full-tree EXF: reads, radiation, zenith angle, wind, bulk formulae, mapfields (2026-09-23, sub-agent)
+- EXF_GETFORCING (EXF_GETFFIELDS ... EXF_MAPFIELDS) bitwise vs full_jaxdump_v5 at X01-X08 incl. the bulk-formula
+  locals X05a/X05b, it 1-3, halos included; only the unread diagnostic zen_fsol_daily differs (2e-16, XLA arccos).
+- Run each gate twice, once with glibc injected through a test-only pure_callback: that separates "the port is
+  literal" from "the libm differs". XLA's log/atan/sin/cos match glibc 2.28 bit for bit; exp (~14 % of arguments) and
+  arccos (~7 %) do not. `exp_glibc` transcribes glibc's FMA-variant exp from the libm machine code (RHEL 8 glibc 2.28
+  = the old IBM fast path without its correctly-rounded slow path). objdump of the oracle's .o files shows which libm
+  routine each call really is (sincos fusion, pow, tan).
+- Dump stages inside a routine can sit after partial updates (lwflux is already set at X02, inside EXF_RADIATION).
+- Parallel indexing of the full oracle: ~5 s instead of ~110 s.

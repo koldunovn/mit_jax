@@ -65,6 +65,7 @@ MANIFEST = {
     "mitgcm_jax/tests/test_adjoint_regression.py": "tier2",
     "mitgcm_jax/tests/test_seaice_advdiff.py": "tier1x",
     "mitgcm_jax/tests/test_seaice_growth.py": "tier1x",
+    "mitgcm_jax/tests/test_exf_full.py": "tier1x",
 }
 
 # Directories searched for test files (must match pyproject testpaths).
