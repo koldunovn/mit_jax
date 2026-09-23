@@ -71,6 +71,8 @@ Read `CLAUDE.md` (project rules) first. This file is the working recipe every ke
      env JAX_PLATFORMS=cpu /work/ab0995/a270088/mambaforge/envs/mitgcm-jax/bin/python -m pytest -q <file>`
   (from `/home/a/a270088/MIT`). The login node may only run `pytest -m smoke` (seconds).
 - Python: `/work/ab0995/a270088/mambaforge/envs/mitgcm-jax/bin/python` (jax 0.10.1, pinned).
+- **Bitwise-capable gates:** `conftest.py` also sets `--xla_disable_hlo_passes=algsimp` (XLA rewrites x/d -> x*(1/d) and
+  folds constant products; 1-ulp changes; 0 with the flag). Standalone scripts: add it to XLA_FLAGS too.
 - **No FMA on CPU for gates:** `conftest.py` sets `XLA_FLAGS=--xla_cpu_max_isa=AVX` (XLA:CPU's default AVX2 fuses
   a*b+c into FMA; the oracle is built with -ffp-contract=off). Standalone scripts must set it themselves:
   `env XLA_FLAGS=--xla_cpu_max_isa=AVX JAX_PLATFORMS=cpu python ...`. With it, pointwise kernels can match bitwise.

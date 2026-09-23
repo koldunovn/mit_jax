@@ -27,6 +27,12 @@ if "xla_force_host_platform_device_count" not in os.environ.get("XLA_FLAGS", "")
 #    with FMA, 0 with --xla_cpu_max_isa=AVX. Oracle gates are therefore bitwise-capable only with this flag.
 if "xla_cpu_max_isa" not in os.environ.get("XLA_FLAGS", ""):
     os.environ["XLA_FLAGS"] = (os.environ.get("XLA_FLAGS", "") + " --xla_cpu_max_isa=AVX").strip()
+# 5. No algebraic rewrites that change rounding: XLA's algsimp pass turns x/broadcast(d) into x*broadcast(1/d) (even for
+#    traced d) and (x*c1)*c2 into x*(c1*c2) for constants. Measured on a [13,50,98,98] array: 1.4e6 and 2.7e6 values
+#    differ by 1 ulp from the Fortran-order result; with --xla_disable_hlo_passes=algsimp, 0. Gates run IEEE-exact in
+#    the Fortran operation order; production runs may re-enable algsimp (ulp-level differences only).
+if "xla_disable_hlo_passes" not in os.environ.get("XLA_FLAGS", ""):
+    os.environ["XLA_FLAGS"] = (os.environ.get("XLA_FLAGS", "") + " --xla_disable_hlo_passes=algsimp").strip()
 
 REPO_ROOT = Path(__file__).resolve().parent
 
