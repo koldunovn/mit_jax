@@ -475,3 +475,14 @@ Production runs may use XLA defaults (ulp-level differences only).
   unrolling its Thomas scans off the CPU makes one LSOR tangent/gradient 2.7/3.0 s instead of 31/31 s on a GH200
   (adjoint vs tangent 5e-16).
 - sbatch --export=ALL,VAR="a,b c" splits VAR at the comma: pass script arguments after the script name instead.
+
+## M2 sea-ice-only adjoint window, 6-48 steps (2026-09-23, sub-agent)
+- The implicit-LSR sea-ice adjoint is FD-exact over 2 days only against a converged forward: at LSR_ERROR 2e-4, FD along
+  stress/velocity is off by 1-330 % and the gradient itself shifts by up to 12 %.
+- Exactly-zero snow under Antarctic summer ice gives FD error ~1/h (1e-8 perturbation -> 1e-26 m snow -> 1e-5 m HEFF
+  jump). Count switch flips between the +-h runs.
+- vmap over the step pullback is 75x slower than a static loop of pullbacks inside one jit (202 s vs 2.7 s per step).
+- full level ~20 s per GMRES solve, Arnoldi-dominated (preconditioner 4 ms, matvec 3 ms); 8 cycles needed (4 leave 3e-9).
+- Pass-through fields: ecco = all 18 carried fields; no_dynamics = UICE, VICE + the LSR-written arrays (UICE cotangent
+  accumulates linearly, 2 -> 90 over 48 steps); full = none. Find them with a one-step single-field probe.
+- The tight LSR runs on one core: pack processes, and size +-h pairs against the time limit.

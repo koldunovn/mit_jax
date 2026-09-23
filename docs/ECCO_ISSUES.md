@@ -61,7 +61,8 @@ case below unless a line says "deviation"; each entry gives the evidence and wha
 11. **Exact-zero branches in the sea-ice thermodynamics.** E.g. `HSNOW > 0` in SEAICE_SOLVE4TEMP: ulp-level noise
     (compiler flags, FMA) creates 1e-24 m of snow where the reference has 0, flipping the branch (Qnet -26 vs -40 W/m^2
     at a point). Runs with sea ice are therefore reproducible only with identical arithmetic; across compilers or
-    platforms they agree only statistically.
+    platforms they agree only statistically. For adjoint checks the same switch makes FD error grow like 1/h for
+    Antarctic summer ice costs (1e-8 perturbation -> 1e-26 m snow -> ~1e-5 m HEFF jump).
 12. **libm dependence.** gfortran calls glibc's `exp` (not correctly rounded) and, vectorised, libmvec's exp
     (`seaice_calc_ice_strength`); results depend on the libm version. The port reproduces both bit for bit
     (`mitgcm_jax/ops/libm.py`).

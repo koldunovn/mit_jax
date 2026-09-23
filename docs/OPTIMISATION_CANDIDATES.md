@@ -14,3 +14,4 @@ Ideas that would make the port faster but are NOT done now. Classes (Nikolay, 20
 | skip CALC_OCE_MXLAYER + FIND_ALPHA when hMixLayer only feeds diagnostics | algorithm (diagnostics-only effect) | one Nr-level scan + EOS derivatives per step | Nikolay 2026-09-23: keep it for now |
 | sea-ice LSR -> zebra (red-black) LSR / JFNK / mEVP | algorithm | GPU-parallel sea-ice dynamics (LSR is sequential chains: 2.6-4 ms/sweep with Pallas) | V4r4 uses plain LSR; zebra exists in MITgcm (SEAICE_LSR_ZEBRA); mEVP is FESOM's choice |
 | host-offloaded / disk checkpointing for long adjoint windows | bitwise | memory beyond 28 days | plan M3 |
+| GMRES of the implicit LSR derivative (pkgs/seaice_lsr.py `_gmres`): Gram-Schmidt on the active basis only, wet interior points only | round-off (derivatives only; the forward is untouched) | full sea-ice adjoint is 40-46 s per step on CPU, ~20 s per solve, Arnoldi-dominated | 2026-09-23 sea-ice window study |

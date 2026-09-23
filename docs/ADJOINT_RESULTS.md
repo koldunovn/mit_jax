@@ -305,3 +305,20 @@ forward check + 3 gradients + screen 37 min; 12 FD evaluations of the 28-day J ~
    compatibility, or exact where it is stable (re-screen every window)?
 5. The dynamic-field norm is dominated by the momentum AB-history cotangents (units m/s^2); a scaled norm (per-field
    RMS weights) would make the screen independent of units. Worth adopting?
+
+## M2: sea-ice-only adjoint window, before ocean coupling (2026-09-23, sub-agent)
+SEAICE_MODEL stepped on its own carried state (18 fields) with the ocean and EXF inputs of oracle.FULL iteration 1
+prescribed (harness gate: cycling iterations 1-3 reproduces P00 bitwise); controls initial HEFF, AREA, UICE, VICE and
+time-constant shifts of atemp, fu, fv; costs Arctic (>70N) ice volume J1 and area J3, Southern Ocean (<60S) volume J2,
+after 6, 24, 48 one-hour steps from 1992-01-01; levels ecco, no_dynamics, full; FD with the LSR converged to 1e-12
+(same code path). scripts/adjoint/seaice_window.py (--summarize), rows in runs/seaice_adjoint/w{06,24,48}.
+1. **full is exact**: TL/adjoint 1e-14 to 8e-14; tight-FD plateaus 1e-10 to 2e-4 for J1, J3 along every control at 48
+   steps; repeats bitwise; no amplification (HEFF cotangent 0.9995/step; velocity cotangents accumulate linearly).
+2. **ecco is an exact identity** over the window (no sea-ice sensitivity at all). no_dynamics matches full to 1e-4 to
+   5e-3 for thickness and air-temperature directions (J1) but is zero or wrong-signed for stress and velocity.
+3. **The production LSR tolerance** (LSR_ERROR = 2e-4) breaks FD along dynamics directions (1-25 % for J1, up to 330 %
+   for J3) and shifts the full (implicit, converged-system) gradient by up to 12 %.
+4. **Southern Ocean summer**: cells with ice and exactly zero snow get 1e-26 m of snow under a 1e-8 perturbation and
+   take the snow branch (HEFF jump ~1e-5 m): FD error ~1/h for J2 except along HEFF.
+5. Cost (16 CPU cores): forward 0.65 s/step (production tolerance), 21-51 s/step tight; reverse ecco 0.04 s, no_dynamics
+   0.6-1.0 s, full 40-46 s per step and cost function (GMRES(40) x 8 per Picard pass, Arnoldi-dominated).
