@@ -9,5 +9,6 @@
   "smoke_ff_restart_from2": "smoke_ff_v2_restart_B_from2",
   "smoke_full_restart_continuous": "smoke_full_restart_A_4steps",
   "smoke_full_restart_from2": "smoke_full_restart_B_from2",
-  "smoke_ff_jaxdump_v3": "smoke_ff_v3_jd_2steps"
+  "smoke_ff_jaxdump_v3": "smoke_ff_v3_jd_2steps",
+  "forced_ff_jaxdump_v3": "smoke_ff_v3_forced_jd_3steps"
 }
