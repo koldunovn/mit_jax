@@ -30,6 +30,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from mitgcm_jax.core.implicit import vertical_factors
+from mitgcm_jax.parallel.tiles import n_tiles
 from mitgcm_jax.params_io import params_pytree
 
 
@@ -148,7 +149,7 @@ def calc_phi_hyd(p, g, kLowC, rhoInSitu, rStarFacC, etaH, phi0surf, totPhiHyd, *
     # phiHydF = 0 at k=1 (calc_phi_hyd.F:139-145); phiHydLow = 0 at k=1 (diags_phi_rlow.F:67-73)
     (_, low), (pC, pF) = jax.lax.scan(level, (z, z), (ks, alpha, dRlocM, dRlocP, ratioRm, ratioRp, rlow_dd))
 
-    shape3 = (L.nTiles, Nr, L.ny, L.nx)
+    shape3 = (n_tiles(g), Nr, L.ny, L.nx)
     phiHydC = jnp.zeros(shape3).at[:, :, J, I].set(jnp.moveaxis(pC, 0, 1))
     phiHydF = jnp.zeros(shape3).at[:, :, J, I].set(jnp.moveaxis(pF, 0, 1))
     alphRho = jnp.zeros(shape3).at[:, :, J, I].set(jnp.moveaxis(alpha, 0, 1))
@@ -187,7 +188,7 @@ def calc_phi_hyd(p, g, kLowC, rhoInSitu, rStarFacC, etaH, phi0surf, totPhiHyd, *
     rS2 = jnp.asarray(rStarFacC)[:, J, I]
     dPhiRef = (jnp.asarray(g.Ro_surf)[:, J, I] - jnp.asarray(g.R_low)[:, J, I]) * gravity           # :164-165
     low = low * rS2 + dPhiRef * (rS2 - 1.0) + jnp.asarray(phi0surf)[:, J, I]                       # :166-169
-    phiHydLow = jnp.zeros((L.nTiles, L.ny, L.nx)).at[:, J, I].set(low)
+    phiHydLow = jnp.zeros((n_tiles(g), L.ny, L.nx)).at[:, J, I].set(low)
 
     # --- diags_phi_hyd.F:101-111 (r* ocean). The first assignment (:56-58, phiHydC + Bo_surf*etaN + phi0surf) is
     # overwritten at every point of the same range (select_rStar>=1 .AND. nonlinFreeSurf>=4, :67), so it is omitted.

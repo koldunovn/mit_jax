@@ -23,6 +23,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from mitgcm_jax.core.implicit import check_unit_vertical_factors, vertical_factors
+from mitgcm_jax.parallel.tiles import n_tiles
 from mitgcm_jax.params_io import params_pytree
 
 
@@ -127,7 +128,7 @@ def apply_forcing_uv(p, g, surfaceForcingU, surfaceForcingV, recip_hFacW, recip_
     Ocean z-coordinates: kSurface = 1 (:108-114); surface stress on j=0..sNy+1, i=1..sNx+1 (U, :142-151) and
     j=1..sNy+1, i=0..sNx+1 (V, :342-353). No AIM/ATM_PHYS/FIZHI/EDDYPSI/RBCS/OBCS/MYPACKAGE in V4r4 ff."""
     L = g.layout
-    shape3 = (L.nTiles, L.Nr, L.ny, L.nx)
+    shape3 = (n_tiles(g), L.Nr, L.ny, L.nx)
     guExt = jnp.zeros(shape3)
     gvExt = jnp.zeros(shape3)
     if not p.momForcing:

@@ -14,12 +14,13 @@ The k loop has no recurrence (each level reads only rhoInSitu(k) and FIND_RHO_2D
 so it is vectorised over k. The only state carried between iterations is rhoKm1, which at k = 1 still holds the k = 2
 value; GRAD_SIGMA does not read it at k = 1 (sigmaR(k=1) = 0, grad_sigma.F:93-98), so level 1 of sigKm1 is 0 here.
 
-ecco-mode seam (NOT implemented): GMREDI_WITH_STABLE_ADJOINT is defined (flux-forced GMREDI_OPTIONS.h:21), so
-do_oceanic_phys.F:900-908 calls ZERO_ADJ_LOC(sigmaX / sigmaY / sigmaR) after every GRAD_SIGMA. Forward: nothing
-(pkg/autodiff/zero_adj.F:45-70 is an empty routine). Adjoint (TAF): the adjoint of the whole sigmaX/Y/R arrays is
-zeroed in every k iteration; every reader of sigma (CALC_IVDC's step function, GGL90 is not a reader, GMREDI slopes)
-runs after the k loop, so in ecco mode the equivalent is jax.lax.stop_gradient on the three sigma arrays returned by
-`rho_sigma_ivdc_mxlayer`; rhoInSitu keeps its gradient (phi_hyd and the salt-plume depth read it).
+ecco-mode seam (implemented in core/forward_step.do_oceanic_phys, AdjointConfig.gm_sigma = "stable"; plan Task 17):
+GMREDI_WITH_STABLE_ADJOINT is defined (flux-forced GMREDI_OPTIONS.h:21), so do_oceanic_phys.F:900-908 calls
+ZERO_ADJ_LOC(sigmaX / sigmaY / sigmaR) after every GRAD_SIGMA. Forward: nothing (pkg/autodiff/zero_adj.F:45-70 is an
+empty routine). Adjoint (TAF): the adjoint of the whole sigmaX/Y/R arrays is zeroed in every k iteration, so no
+reader of sigma passes a derivative back: CALC_IVDC (a step function anyway), GGL90_CALC (reads sigmaR,
+ggl90_calc.F:218-219) and the GMREDI slopes. The equivalent is jax.lax.stop_gradient on the three sigma arrays
+returned by `rho_sigma_ivdc_mxlayer`; rhoInSitu keeps its gradient (phi_hyd and the salt-plume depth read it).
 """
 
 from dataclasses import dataclass
@@ -31,6 +32,7 @@ import numpy as np
 from mitgcm_jax.core import eos as eos_mod
 from mitgcm_jax.core.ivdc import calc_ivdc
 from mitgcm_jax.core.mxlayer import MxLayerParams, calc_oce_mxlayer
+from mitgcm_jax.parallel.tiles import tile_index, tile_rows
 
 # ini_vertical_grid.F:56  rkSign = -1 (z coordinates: k and r in opposite sense)
 RKSIGN = -1.0
@@ -95,9 +97,10 @@ def _corner_maps(L, fill4dir):
     return out
 
 
-def fill_cs_corner_tr(trFld, fill4dir, withSigns, layout, facet_dims=FACET_DIMS_LLC90):
+def fill_cs_corner_tr(trFld, fill4dir, withSigns, layout, facet_dims=FACET_DIMS_LLC90, tiles=None):
     """FILL_CS_CORNER_TR_RL (fill_cs_corner_tr_rl.F:12-273) on [tile, ..., ny, nx] arrays, all tiles at once.
-    useCubedSphereExchange = T (exch2). Corners are processed in the Fortran order SW, SE, NW, NE."""
+    useCubedSphereExchange = T (exch2). Corners are processed in the Fortran order SW, SE, NW, NE. tiles: global
+    tile numbers of trFld's tiles (parallel.tiles.tile_index(g); None = all tiles in order)."""
     L = layout
     negOne = -1.0 if withSigns else 1.0  # fill_cs_corner_tr_rl.F:71-72
     flags = cs_corners(L, facet_dims)
@@ -106,7 +109,7 @@ def fill_cs_corner_tr(trFld, fill4dir, withSigns, layout, facet_dims=FACET_DIMS_
         if not f.any():
             continue
         filled = trFld.at[..., ty, tx].set(negOne * trFld[..., sy, sx])
-        sel = jnp.asarray(f).reshape((L.nTiles,) + (1,) * (trFld.ndim - 1))
+        sel = jnp.asarray(tile_rows(f, tiles)).reshape((-1,) + (1,) * (trFld.ndim - 1))
         trFld = jnp.where(sel, filled, trFld)
     return trFld
 
@@ -118,7 +121,7 @@ def grad_sigma(g, rhoK, sigKm1, sigKp1):
     L = g.layout
     zero = jnp.zeros_like(rhoK)
     # grad_sigma.F:57-61 local copy; :65-68 corner fill for X
-    rhoLoc = fill_cs_corner_tr(rhoK, 1, False, L)
+    rhoLoc = fill_cs_corner_tr(rhoK, 1, False, L, tiles=tile_index(g))
     # grad_sigma.F:70-76  j = 1-OLy..sNy+OLy, i = 1-OLx+1..sNx+OLx
     J, I = L.js(1 - L.OLy, L.sNy + L.OLy), L.is_(1 - L.OLx + 1, L.sNx + L.OLx)
     Im1 = L.is_(1 - L.OLx, L.sNx + L.OLx - 1)
@@ -126,7 +129,7 @@ def grad_sigma(g, rhoK, sigKm1, sigKp1):
                                    * g.recip_dxC[:, None, J, I]
                                    * (rhoLoc[..., J, I] - rhoLoc[..., J, Im1]))
     # grad_sigma.F:80-83 corner fill for Y (on the X-filled local copy)
-    rhoLoc = fill_cs_corner_tr(rhoLoc, 2, False, L)
+    rhoLoc = fill_cs_corner_tr(rhoLoc, 2, False, L, tiles=tile_index(g))
     # grad_sigma.F:85-91  j = 1-OLy+1..sNy+OLy, i = 1-OLx..sNx+OLx
     J, I = L.js(1 - L.OLy + 1, L.sNy + L.OLy), L.is_(1 - L.OLx, L.sNx + L.OLx)
     Jm1 = L.js(1 - L.OLy, L.sNy + L.OLy - 1)

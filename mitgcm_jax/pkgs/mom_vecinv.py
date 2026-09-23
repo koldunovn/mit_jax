@@ -39,6 +39,7 @@ from dataclasses import dataclass, fields
 import jax
 import jax.numpy as jnp
 
+from mitgcm_jax.parallel.tiles import tile_index
 from mitgcm_jax.pkgs import mom_common as mc
 from mitgcm_jax.pkgs.mom_common import (BottomDragParams, MomViscParams, _sl, g2, vcol, recip_deepFacC,
                                         recip_deepFac2C, deepFac2F, cosFacU, cosFacV)
@@ -132,13 +133,13 @@ def mom_vi_del2uv(p, g, hDiv, vort3, hFacZ, recip_hFacW, recip_hFacS):
     L = g.layout
     R = (2 - L.OLy, L.sNy + L.OLy - 1, 2 - L.OLx, L.sNx + L.OLx - 1)
     s = lambda a, dj=0, di=0: a[_sl(L, *R, dj, di)]  # noqa: E731
-    hDiv = mc.fill_cs_corner_tr_rl(hDiv, 1, False, L, p.useCubedSphereExchange)  # :82-86
+    hDiv = mc.fill_cs_corner_tr_rl(hDiv, 1, False, L, p.useCubedSphereExchange, tile_index(g))  # :82-86
     zv = hFacZ * vort3
     val = ((s(hDiv) - s(hDiv, 0, -1)) * s(g2(g, "recip_dxC"))
            - s(recip_hFacW) * (s(zv, 1, 0) - s(zv)) * s(g2(g, "recip_dyG"))) \
         * s(g.f["maskW"]) * recip_deepFacC  # :92-97
     del2u = jnp.zeros_like(hDiv).at[_sl(L, *R)].set(val)
-    hDiv = mc.fill_cs_corner_tr_rl(hDiv, 2, False, L, p.useCubedSphereExchange)  # :107-111
+    hDiv = mc.fill_cs_corner_tr_rl(hDiv, 2, False, L, p.useCubedSphereExchange, tile_index(g))  # :107-111
     val = ((s(hDiv) - s(hDiv, -1, 0)) * s(g2(g, "recip_dyC"))
            + s(recip_hFacS) * (s(zv, 0, 1) - s(zv)) * s(g2(g, "recip_dxG"))) \
         * s(g.f["maskS"]) * recip_deepFacC  # :117-122
@@ -349,7 +350,8 @@ def mom_vecinv(p, g, uVel, vVel, wVel, hFacC, hFacW, hFacS, recip_hFacC, recip_h
                kappaRU, kappaRV, terms=False, visc=None):
     """MOM_VECINV (mom_vecinv.F) for all levels k at once. Returns dict gU, gV, guDissip, gvDissip ([T, Nr, j, i]);
     with terms=True also the intermediate fields (KE, vort3, hDiv, viscosities, each tendency term).
-    `visc` overrides the (viscAh_Z, viscAh_D, viscA4_Z, viscA4_D) tuple (tests only).
+    `visc` overrides the (viscAh_Z, viscAh_D, viscA4_Z, viscA4_D) tuple (tests; the viscFacInAd adjoint seam,
+    core/forward_step.mom_vecinv_adj, passes the MOM_CALC_VISC result so it can differentiate at other viscosities).
     Pass `p` as a jit argument (not closed over), so its float leaves are traced: XLA re-associates products of
     compile-time constants, the Fortran multiplies by run-time namelist values."""
     L = g.layout

@@ -24,6 +24,7 @@ import jax.numpy as jnp
 from mitgcm_jax.core.implicit import impldiff, impldiff_deltaTX
 from mitgcm_jax.core.phi_hyd import PhiHydParams, calc_phi_hyd
 from mitgcm_jax.core.timestep import TimestepParams, apply_forcing_uv, timestep
+from mitgcm_jax.parallel.tiles import n_tiles
 
 
 @dataclass(frozen=True)
@@ -83,7 +84,7 @@ def calc_viscosity(p, g, GGL90viscArU, GGL90viscArV):
     kappaRV masked by maskS (ggl90_calc_visc.F:49-50 vs :56-57)."""
     L = g.layout
     Nr = L.Nr
-    shape = (L.nTiles, Nr + 1, L.ny, L.nx)
+    shape = (n_tiles(g), Nr + 1, L.ny, L.nx)
     kappaRU = jnp.zeros(shape)
     kappaRV = jnp.zeros(shape)
     if not p.momViscosity:
@@ -128,7 +129,7 @@ def dynamics(p, g, kLowC, s, mom_vecinv, myIter):
     """
     L = g.layout
     ts = p.ts
-    shape2 = (L.nTiles, L.ny, L.nx)
+    shape2 = (n_tiles(g), L.ny, L.nx)
     phiSurfX = jnp.zeros(shape2)  # dynamics.F:323 (CALC_GRAD_PHI_SURF not called: implicSurfPress = 1, :349)
     phiSurfY = jnp.zeros(shape2)  # dynamics.F:324
 
@@ -138,7 +139,7 @@ def dynamics(p, g, kLowC, s, mom_vecinv, myIter):
                       myIter=myIter)
 
     out = dict(ph, kappaRU=kappaRU, kappaRV=kappaRV, guNm=s["guNm"], gvNm=s["gvNm"])
-    gU = jnp.zeros((L.nTiles, L.Nr, L.ny, L.nx))  # dynamics.F:305-306
+    gU = jnp.zeros((n_tiles(g), L.Nr, L.ny, L.nx))  # dynamics.F:305-306
     gV = jnp.zeros_like(gU)
     if p.momStepping:  # dynamics.F:499
         gU, gV, guDissip, gvDissip = mom_vecinv(kappaRU, kappaRV)

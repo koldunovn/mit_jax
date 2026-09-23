@@ -24,10 +24,12 @@ An exchange is linear (copy with sign), so its JAX transpose is the matching sca
 from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
+import jax
 import jax.numpy as jnp
+import numpy as np
 
 from mitgcm_jax.layout import Layout
+from mitgcm_jax.parallel.global_sum import global_sum_tile
 
 MAP_DIR = Path(__file__).resolve().parents[1] / "data"
 
@@ -140,12 +142,30 @@ def _apply(m, own, fa, fb):
     return out * sign
 
 
+@jax.tree_util.register_pytree_node_class
 class Exchanger:
-    """Halo exchanges on [tile, ..., j, i] arrays. One code path for numpy/jax inputs (returns jax arrays)."""
+    """Halo exchanges on [tile, ..., j, i] arrays. One code path for numpy/jax inputs (returns jax arrays).
+
+    A pytree (the map arrays are its leaves), so it can be passed to a jitted function as an ARGUMENT
+    (adjoint/checkpoint.Model does): closed over, the maps are compile-time constants and XLA constant-folds the
+    scatter-adds of the exchange transposes. Measured (one-step value_and_grad, LLC90, CPU 16 cores): compile 64 s
+    closed over vs 26 s as an argument; forward bitwise equal, gradient equal to 3e-15 (scatter-add order)."""
 
     def __init__(self, maps: ExchangeMaps):
         self.L = maps.layout
         self.m = {k: (jnp.asarray(s), jnp.asarray(c), jnp.asarray(g)) for k, (s, c, g) in maps.maps.items()}
+
+    def tree_flatten(self):
+        keys = tuple(sorted(self.m))
+        return tuple(self.m[k] for k in keys), (keys, self.L)
+
+    @classmethod
+    def tree_unflatten(cls, aux, leaves):
+        keys, L = aux
+        ex = object.__new__(cls)
+        ex.L = L
+        ex.m = dict(zip(keys, leaves))
+        return ex
 
     def scalar(self, a, kind="T"):
         fa, lead = _flat(jnp.asarray(a), self.L)
@@ -174,9 +194,27 @@ class Exchanger:
     def exch_uv_bgrid(self, u, v, with_signs=True):
         return self.vector(u, v, "Bs" if with_signs else "Bn")
 
+    # Global reductions over tiles. Single device: every tile is in the array. The sharded exchanger
+    # (sharded_exchange.ShardedExchanger) overrides these with the same results for any number of devices.
+    def all_tiles(self, per_tile):
+        """[nTiles, ...] per-tile values -> the same, every tile in tile order."""
+        return per_tile
+
+    def global_sum_tile(self, phiTile):
+        """GLOBAL_SUM_TILE_RL: per-tile partial sums [nTiles] -> 0 + tile 1 + ... in order (global_sum.py)."""
+        return global_sum_tile(phiTile)
+
     def global_max(self, a):
-        """_GLOBAL_MAX_RL over every tile of a [nTiles, ...] array (max is order-free); single device."""
+        """_GLOBAL_MAX_RL over every tile of a [nTiles, ...] array (max is order-free)."""
         return jnp.max(a)
+
+    def vary(self, x):
+        """Sharding type only (sharded: typed as varying over the tile axis); the identity on one device."""
+        return x
+
+    def zero_padding(self, a):
+        """Padding tiles set to 0 (sharded layout); the identity on one device (no padding)."""
+        return a
 
 
 def default_exchanger(layout=None):

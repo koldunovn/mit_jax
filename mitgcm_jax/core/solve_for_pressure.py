@@ -35,7 +35,7 @@ def update_cg2d(p: FreeSurfParams, cp: _cg2d.Cg2dParams, g, ex, hFacW, hFacS, re
     pW, pS, pC = jnp.asarray(pW), jnp.asarray(pS), jnp.asarray(pC)
     cg2dNorm, cg2dpcOffDFac = cp.cg2dNorm, cp.cg2dpcOffDFac
     J1, I1 = L.js(1, L.sNy + 1), L.is_(1, L.sNx + 1)
-    z2 = jnp.zeros(hFacW.shape[:1] + hFacW.shape[2:])            # :72-80 (full range zeroed)
+    z2 = jnp.zeros_like(hFacW[:, 0])                             # :72-80 (full range zeroed; typed like hFacW)
     drF = jnp.asarray(g.drF)[None, :, None, None]
     # :101-115 aW2d = aW2d + (dyG*drF(k)*hFacW)*recip_dxC, k = 1..Nr in order (terms for all k, then the k sum)
     tW = g.dyG[:, None, J1, I1] * drF * hFacW[:, :, J1, I1] * g.recip_dxC[:, None, J1, I1]

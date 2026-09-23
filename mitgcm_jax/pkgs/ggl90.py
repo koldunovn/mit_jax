@@ -36,6 +36,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from mitgcm_jax.parallel.tiles import tile_index, tile_rows
 from mitgcm_jax.params_io import params_pytree
 
 # GGL90.h:57-60 (PARAMETER)
@@ -328,7 +329,7 @@ def ggl90_calc(p: GGL90Params, g, GGL90TKE, uVel, vVel, sigmaR, surfaceForcingU,
     viscArNr = jnp.asarray(p.viscArNr)
     diffKrNrS = jnp.asarray(p.diffKrNrS)
     kLowC = klowc(maskC)
-    mskCor = jnp.asarray(mskcor(p, L))
+    mskCor = jnp.asarray(tile_rows(mskcor(p, L), tile_index(g)))  # rows of g's tiles
 
     def col(v):  # [Nr] -> broadcast over [T, Nr, j, i]
         return v[None, :, None, None]

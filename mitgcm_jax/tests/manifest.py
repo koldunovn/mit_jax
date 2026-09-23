@@ -32,6 +32,8 @@ MANIFEST = {
     "mitgcm_jax/tests/test_monitor.py": "smoke",
     "mitgcm_jax/tests/test_dump_io.py": "smoke",
     "mitgcm_jax/tests/test_exchange.py": "tier1",
+    "mitgcm_jax/tests/test_sharded.py": "tier1",
+    "mitgcm_jax/tests/test_sharded_step.py": "tier1x",
     "mitgcm_jax/tests/test_step_fluxforced.py": "tier1",
     "mitgcm_jax/tests/test_grid.py": "tier1",
     "mitgcm_jax/tests/test_monitor_stats.py": "tier1",
@@ -53,6 +55,8 @@ MANIFEST = {
     "mitgcm_jax/tests/test_init_step.py": "tier1x",
     "mitgcm_jax/tests/test_adjoint_modes.py": "tier1",
     "mitgcm_jax/tests/test_adjoint_modes_grad.py": "tier1x",
+    "mitgcm_jax/tests/test_checkpoint.py": "tier1x",
+    "mitgcm_jax/tests/test_checkpoint_drivers.py": "tier1",
     "mitgcm_jax/tests/test_ctrl.py": "tier1x",
 }
 

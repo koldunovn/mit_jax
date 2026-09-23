@@ -22,13 +22,15 @@ exchange ignoring corners, exch2_s3d_rl.F) is the scalar exch2 map restricted to
 reads (i=0, sNx+1 for j=1..sNy and j=0, sNy+1 for i=1..sNx): the full-width exch2 map writes the same values there.
 Halo points no exchange writes (open facet edges) keep 0, as the common-block arrays do (ini_cg2d.F:65-78).
 
-Differentiation (CLAUDE.md: never through solver iterations): `cg2d_solve` wraps the literal forward iteration in
-`jax.lax.custom_linear_solve(symmetric=True)`. The unknown is the interior of the tile arrays (halo lanes are 0 in
-the solution and ignored in the operator), so the operator is the symmetric 5-point matrix. The transpose solve is
-the same preconditioned CG from a zero first guess to `adj_tolerance` (normalised residual). The first guess enters
-only through `solve`'s closure (stop_gradient), so it carries no derivative. `stop_coeff_grad=True` (ECCO/TAF
-semantics of pkg/autodiff/cg2d.flow: only cg2d_b and cg2d_x are active) stops the derivative with respect to the
-operator coefficients aW2d, aS2d, aC2d; the forward is unchanged.
+Differentiation (CLAUDE.md: never through solver iterations): `cg2d_solve` is a custom_jvp whose primal is the
+literal forward iteration and whose tangent is the implicit derivative dx = A^-1 (db - dA x), with A^-1 a
+`jax.lax.custom_linear_solve(symmetric=True)` of the same preconditioned CG from a zero first guess to `adj_tolerance`
+(normalised residual), used for the tangent and (transposed) for the adjoint alike. The unknown is the interior of the
+tile arrays (halo lanes are 0 in the solution and ignored in the operator), so the operator is the symmetric 5-point
+matrix. The first guess is stop_gradient'ed, so it carries no derivative. `stop_coeff_grad=True` (ECCO/TAF semantics
+of pkg/autodiff/cg2d.flow: only cg2d_b and cg2d_x are active) stops the derivative with respect to the operator
+coefficients aW2d, aS2d, aC2d; the forward is unchanged. The solution is a named residual "cg2d_x"
+(jax.ad_checkpoint.checkpoint_name) so a rematerialized reverse pass can keep it instead of re-running the iteration.
 """
 
 from dataclasses import dataclass
@@ -38,7 +40,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from jax import lax
+from jax.ad_checkpoint import checkpoint_name
 
+from mitgcm_jax.parallel.global_sum import global_sum_tile  # noqa: F401  (GLOBAL_SUM_TILE_RL, re-exported)
 from mitgcm_jax.params_io import params_pytree
 
 
@@ -54,6 +58,10 @@ class Cg2dParams:
     cg2dpcOffDFac: float = 0.51  # set_defaults.F:285 (UPDATE_CG2D preconditioner, update_cg2d.F:181, 188)
     nIterMin: int = -1       # solve_for_pressure.F:273 nIterMin = cg2dUseMinResSol - 1 (ini_parms.F:1451-1455: 0)
     sum_order: str = "fortran"   # "fortran" (sequential j/i per tile, as cg2d.F) or "tile" (XLA tree per tile)
+    # rows of the "fortran" tile sum per scan iteration (lax.scan unroll): the same additions in the same order for
+    # every value (bitwise equal solution), fewer sequential kernels. GPU A100, 164 iterations: 1 -> 298 ms/solve
+    # (1.6 s compile), 2 -> 166 ms (4.6 s), 5 -> 103 ms (22 s), 10 -> 94 ms (80 s), 30 -> 75 ms (299 s compile)
+    sum_unroll: int = 1
     adj_tolerance: float = 1e-13  # transpose (adjoint) solve: normalised residual target
     adj_max_iters: int = 2000
     stop_coeff_grad: bool = False  # ECCO semantics (cg2d.flow ACTIVE = cg2d_b, cg2d_x only)
@@ -130,7 +138,7 @@ def _ini_cg2d_norm(L, dyG, dxG, recip_dxC, recip_dyC, drF, hFacW, hFacS, implicS
 # sums
 
 
-def tile_sum(a, order):
+def tile_sum(a, order, unroll=1):
     """Per-tile partial sums of an interior field a [T, sNy, sNx] -> [T].
 
     "fortran": `s = 0; DO j; DO i; s = s + a(i,j)` (cg2d.F:164-186 and friends), strictly sequential.
@@ -147,20 +155,18 @@ def tile_sum(a, order):
             s = s + arow[:, i]
         return s, None
 
-    s, _ = lax.scan(row, jnp.zeros(a.shape[0], a.dtype), jnp.moveaxis(a, 1, 0))
+    # carry initialised from `a` (zeros_like keeps a's sharding type: under shard_map a constant initial carry would
+    # differ in type from the tile-varying carry the body returns)
+    s, _ = lax.scan(row, jnp.zeros_like(a[:, 0, 0]), jnp.moveaxis(a, 1, 0), unroll=unroll)
     return s
 
 
-def global_sum_tile(phiTile):
-    """GLOBAL_SUM_TILE_RL (global_sum_tile.F, serial / GLOBAL_SUM_ORDER_TILES): 0 + tile 1 + tile 2 + ... in order."""
-    s = jnp.zeros((), phiTile.dtype)
-    for t in range(phiTile.shape[0]):
-        s = s + phiTile[t]
-    return s
-
-
-def global_sum(a_interior, order):
-    return global_sum_tile(tile_sum(a_interior, order))
+def global_sum(a_interior, order, ex=None, unroll=1):
+    """_GLOBAL_SUM_RL of an interior field: per-tile partial sums, then the tiles in fixed order (global_sum_tile.F);
+    through the exchanger `ex` when given (sharded: every device, every P, the same result)."""
+    if ex is None:
+        return global_sum_tile(tile_sum(a_interior, order, unroll))
+    return ex.global_sum_tile(tile_sum(a_interior, order, unroll))
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -196,7 +202,7 @@ def apply_preconditioner(L, pW, pS, pC, r):
 # the literal solver
 
 
-def cg2d_fortran(ex, ops, cg2d_b, cg2d_x, *, cg2dNorm, tolerance, max_iters, sum_order, nIterMin=-1):
+def cg2d_fortran(ex, ops, cg2d_b, cg2d_x, *, cg2dNorm, tolerance, max_iters, sum_order, nIterMin=-1, sum_unroll=1):
     """CG2D (cg2d.F:110-395). ops = (aW2d, aS2d, aC2d, pW, pS, pC); cg2d_b, cg2d_x full [T, ny, nx].
 
     Returns (cg2d_x, diag): cg2d_x exactly as the Fortran leaves it (interior = solution; halos = the exchanged
@@ -209,12 +215,12 @@ def cg2d_fortran(ex, ops, cg2d_b, cg2d_x, *, cg2dNorm, tolerance, max_iters, sum
     aW2d, aS2d, aC2d, pW, pS, pC = (jnp.asarray(a) for a in ops)
     cg2d_b, cg2d_x = jnp.asarray(cg2d_b), jnp.asarray(cg2d_x)
     J, I = _interior(L)
-    gsum = lambda a: global_sum(a, sum_order)  # noqa: E731
+    gsum = lambda a: global_sum(a, sum_order, ex, sum_unroll)  # noqa: E731
     cg2dTolerance_sq = tolerance * tolerance                        # cg2d.F:111
     eta_qrNM1 = jnp.ones((), cg2d_b.dtype)                           # cg2d.F:113
 
     b = cg2d_b[:, J, I] * cg2dNorm                                   # cg2d.F:121
-    rhsMax = jnp.max(jnp.abs(b))                                     # cg2d.F:122, 130 (_GLOBAL_MAX_RL)
+    rhsMax = ex.global_max(jnp.abs(b))                               # cg2d.F:122, 130 (_GLOBAL_MAX_RL)
     nz = rhsMax != 0.0
     rhsNorm = jnp.where(nz, 1.0 / jnp.where(nz, rhsMax, 1.0), 1.0)   # cg2d.F:131-132
     b = b * rhsNorm                                                  # cg2d.F:137
@@ -267,38 +273,103 @@ def cg2d_fortran(ex, ops, cg2d_b, cg2d_x, *, cg2dNorm, tolerance, max_iters, sum
 # differentiable wrapper
 
 
+def _split_static(tree):
+    """(static, dyn): the array/scalar leaves of `tree` (possibly traced: custom_jvp ARGUMENTS) and everything else
+    (the tree structure and non-array leaves such as the single-device Exchanger object: nondiff static)."""
+    leaves, treedef = jax.tree.flatten(tree)
+    is_dyn = tuple(isinstance(x, (jax.Array, np.ndarray, np.generic, float, int)) or hasattr(x, "aval")
+                   for x in leaves)
+    return (treedef, is_dyn, tuple(None if d else x for x, d in zip(leaves, is_dyn))), \
+        [x for x, d in zip(leaves, is_dyn) if d]
+
+
+def _join_static(static, dyn):
+    treedef, is_dyn, objs = static
+    it = iter(dyn)
+    return jax.tree.unflatten(treedef, [next(it) if d else o for d, o in zip(is_dyn, objs)])
+
+
+def _matvec(ex, inner, cg2dNorm, A, v):
+    """(A / cg2dNorm) v on the interior, 0 on halo lanes: CG2D solves (cg2dNorm-scaled operator) x = cg2dNorm * cg2d_b
+    (cg2d.F:121), i.e. (A/cg2dNorm) x = cg2d_b."""
+    L = ex.L
+    J, I = _interior(L)
+    xe = ex.exch_xy(jnp.where(inner, v, 0.0))
+    return jnp.zeros_like(v).at[:, J, I].set(apply_operator(L, *A, xe) / cg2dNorm)
+
+
+def _zero_tangent(x):
+    if jnp.issubdtype(jnp.result_type(x), jnp.floating):
+        return jnp.zeros_like(x)
+    return np.zeros(jnp.shape(x), jax.dtypes.float0)
+
+
+@partial(jax.custom_jvp, nondiff_argnums=(0,))
+def _cg2d_implicit(static, dyn, A, b):
+    """The literal CG2D from the (stop_gradient) first guess: (x on the interior, 0 on halo lanes; diag)."""
+    p, ex, inner, cg2dNorm, pre, x_first = _join_static(static, dyn)
+    x, diag = cg2d_fortran(ex, tuple(A) + tuple(pre), b, x_first, cg2dNorm=cg2dNorm, tolerance=p.cg2dTolerance,
+                           max_iters=p.cg2dMaxIters, sum_order=p.sum_order, sum_unroll=p.sum_unroll,
+                           nIterMin=p.nIterMin)
+    diag = dict(diag, x_fortran=x)
+    return jnp.where(inner, x, 0.0), diag
+
+
+@_cg2d_implicit.defjvp
+def _cg2d_implicit_jvp(static, primals, tangents):
+    """Implicit derivative of A x = b at the literal solution x: dx = A^-1 (db - dA x), A^-1 a tight preconditioned CG
+    from a zero first guess (adj_tolerance) inside custom_linear_solve, whose transpose is the same tight CG (the
+    operator is symmetric). The tangent-linear model and the adjoint are thus transposes of each other (dot test,
+    test_checkpoint.py); no derivative w.r.t. the preconditioner, the first guess or cg2dNorm (as with the TAF cg2d
+    adjoint, pkg/autodiff/cg2d.flow). x is a named residual ("cg2d_x"): a rematerialized reverse pass that keeps it
+    (adjoint/checkpoint.py SAVE_NAMES) does not re-run the literal iteration."""
+    dyn, A, b = primals
+    _, dA, db = tangents
+    p, ex, inner, cg2dNorm, pre, x_first = _join_static(static, dyn)
+    x, diag = _cg2d_implicit(static, dyn, A, b)
+    x = checkpoint_name(x, "cg2d_x")
+    rhs = db - _matvec(ex, inner, cg2dNorm, dA, x)                  # d(A x) = dA x + A dx = db, dA x linear in dA
+
+    def tight(_, r):
+        y, _ = cg2d_fortran(ex, tuple(A) + tuple(pre), jnp.where(inner, r, 0.0), jnp.zeros_like(r),
+                            cg2dNorm=cg2dNorm, tolerance=p.adj_tolerance, max_iters=p.adj_max_iters,
+                            sum_order="tile")
+        return jnp.where(inner, y, 0.0)
+
+    def tight_transpose(_, r):
+        # Sharded layout: the padding tiles (replicas of tile 1, parallel/sharded_exchange.py) read real tiles' halos
+        # but no real tile reads them, so the padded operator is not symmetric and the true transpose solution is 0
+        # on the padding tiles (their cotangent is 0: nothing downstream reads them). ex.zero_padding enforces it
+        # (identity on one device); without it their replica values would leak back into real tiles' gradients.
+        return ex.zero_padding(tight(_, r))
+
+    dx = lax.custom_linear_solve(partial(_matvec, ex, inner, cg2dNorm, A), rhs, tight, tight_transpose,
+                                 symmetric=True)
+    return (x, diag), (dx, jax.tree.map(_zero_tangent, diag))
+
+
 def cg2d_solve(p: Cg2dParams, ex, ops, cg2d_b, cg2d_x):
-    """Solve A x = b with the literal CG2D forward and implicit (custom_linear_solve) derivatives.
+    """Solve A x = b with the literal CG2D forward and implicit derivatives (custom_jvp, _cg2d_implicit_jvp).
 
     Returns (x, diag): x [T, ny, nx] with the Fortran solution on the interior and 0 on halo lanes (the linear-solve
     unknown); diag = cg2d_fortran's diagnostics plus `x_fortran`, the full array exactly as CG2D returns it (halos
     included; for the C02 gate, carries no derivative).
+
+    Before 2026-09-23 (plan Task 18) the wrapper was lax.custom_linear_solve(matvec, b, solve=literal CG2D,
+    transpose_solve=tight CG): its VJP used the tight solve, but its JVP ran the literal solve on the TANGENT from the
+    PRIMAL first guess at the Fortran tolerance, so the tangent-linear model was not linear in the tangent (dot test
+    of 2 steps: see test_checkpoint.py), and the primal x its JVP rule used was not nameable for remat.
     """
     L = ex.L
-    inner = jnp.asarray(interior_mask(L))
+    # ex.vary: identity on one device. Sharded (shard_map, check_vma=True), invariant values the solves close over and
+    # combine with tile-varying data must be typed varying BEFORE custom_linear_solve: JAX 0.10.1 re-traces the solve
+    # at lowering and fails on the pvary it inserted inside ("pvary is a invariant->variant collective")
+    inner = ex.vary(jnp.asarray(interior_mask(L)))
+    cg2dNorm = ex.vary(p.cg2dNorm)
     aW2d, aS2d, aC2d, pW, pS, pC = ops
     if p.stop_coeff_grad:
         aW2d, aS2d, aC2d = (lax.stop_gradient(a) for a in (aW2d, aS2d, aC2d))
     x_first = lax.stop_gradient(cg2d_x)
-    J, I = _interior(L)
-
-    def matvec(v):
-        # CG2D solves (cg2dNorm-scaled operator) x = cg2dNorm * cg2d_b (cg2d.F:121), i.e. (A/cg2dNorm) x = cg2d_b
-        xe = ex.exch_xy(jnp.where(inner, v, 0.0))
-        return jnp.zeros_like(v).at[:, J, I].set(apply_operator(L, aW2d, aS2d, aC2d, xe) / p.cg2dNorm)
-
-    def solve(_, b):
-        x, diag = cg2d_fortran(ex, (aW2d, aS2d, aC2d, pW, pS, pC), b, x_first, cg2dNorm=p.cg2dNorm,
-                               tolerance=p.cg2dTolerance, max_iters=p.cg2dMaxIters, sum_order=p.sum_order,
-                               nIterMin=p.nIterMin)
-        diag = dict(diag, x_fortran=x)
-        return jnp.where(inner, x, 0.0), diag
-
-    def transpose_solve(_, b):
-        x, diag = cg2d_fortran(ex, (aW2d, aS2d, aC2d, pW, pS, pC), jnp.where(inner, b, 0.0), jnp.zeros_like(b),
-                               cg2dNorm=p.cg2dNorm, tolerance=p.adj_tolerance, max_iters=p.adj_max_iters,
-                               sum_order="tile")
-        diag = dict(diag, x_fortran=x)
-        return jnp.where(inner, x, 0.0), diag
-
-    return lax.custom_linear_solve(matvec, cg2d_b, solve, transpose_solve, symmetric=True, has_aux=True)
+    static, dyn = _split_static((p, ex, inner, cg2dNorm, (pW, pS, pC), x_first))
+    x, diag = _cg2d_implicit(static, dyn, (aW2d, aS2d, aC2d), cg2d_b)
+    return checkpoint_name(x, "cg2d_x"), diag

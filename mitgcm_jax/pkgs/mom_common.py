@@ -37,6 +37,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from mitgcm_jax.io.llc import FACET_SHAPE
+from mitgcm_jax.parallel.tiles import n_tiles, tile_index, tile_rows
 from mitgcm_jax.params_io import params_pytree
 
 # EEPARAMS / grid factors that are exactly one in V4r4 (see module docstring)
@@ -203,10 +204,11 @@ def _set_point(a, L, j, i, flag, val):
     return a.at[..., L.jj(j), L.ii(i)].set(jnp.where(_tile_flag(flag, a.ndim), val, cur))
 
 
-def fill_cs_corner_tr_rl(fld, fill4dir, withSigns, L, useCubedSphereExchange=True):
+def fill_cs_corner_tr_rl(fld, fill4dir, withSigns, L, useCubedSphereExchange=True, tiles=None):
     """FILL_CS_CORNER_TR_RL (eesupp/src/fill_cs_corner_tr_rl.F:71-270), fill4dir 1 (X) or 2 (Y).
     Source and destination points never overlap (the sources lie in the edge halos, not in the corner blocks),
-    so the Fortran element loop is one gather + one scatter."""
+    so the Fortran element loop is one gather + one scatter. tiles: global tile numbers of fld's tiles
+    (parallel.tiles.tile_index(g); None = all tiles in order)."""
     if not useCubedSphereExchange:  # fill_cs_corner_tr_rl.F:74
         return fld
     topo = cs_tile_topology(L)
@@ -233,8 +235,8 @@ def fill_cs_corner_tr_rl(fld, fill4dir, withSigns, L, useCubedSphereExchange=Tru
                 cid.append(c)
     dst, src, cid = np.array(dst), np.array(src), np.array(cid)
     assert not (set(map(tuple, dst)) & set(map(tuple, src)))
-    flags = np.stack([topo["sw"], topo["se"], topo["nw"], topo["ne"]], axis=1)[:, cid]  # [T, n]
-    flags = jnp.asarray(flags).reshape((flags.shape[0],) + (1,) * (fld.ndim - 3) + (flags.shape[1],))
+    flags = np.stack([topo["sw"], topo["se"], topo["nw"], topo["ne"]], axis=1)[:, cid]  # [nTiles, n]
+    flags = jnp.asarray(tile_rows(flags, tiles)).reshape((-1,) + (1,) * (fld.ndim - 3) + (flags.shape[1],))
     vals = fld[..., src[:, 0], src[:, 1]]
     cur = fld[..., dst[:, 0], dst[:, 1]]
     return fld.at[..., dst[:, 0], dst[:, 1]].set(jnp.where(flags, negOne * vals, cur))
@@ -281,7 +283,7 @@ def mom_calc_visc(p, g, lengths=None, gibraltar=True):
     L = g.layout
     lengths = visc_length_scales(p, g) if lengths is None else lengths
     Nr = g.f["maskC"].shape[1]
-    shape = (L.nTiles, Nr, L.ny, L.nx)
+    shape = (n_tiles(g), Nr, L.ny, L.nx)
     recip_dt = _recip_dt(p)  # mom_calc_visc.F:167-168
     # mom_calc_visc.F:170-217: viscAhRe_max = viscA4Re_max = 0, calcLeith = calcSmag = F (from_namelists checks)
     S = _sl(L, 2 - L.OLy, L.sNy + L.OLy - 1, 2 - L.OLx, L.sNx + L.OLx - 1)
@@ -371,7 +373,7 @@ def mom_calc_relvort3(g, uFld, vFld, useCubedSphereExchange=True):
     vort3 = vort3.at[_sl(L, *R)].set(val)
     if not useCubedSphereExchange:  # :83
         return vort3
-    topo = cs_tile_topology(L)
+    topo = {k: tile_rows(v, tile_index(g)) for k, v in cs_tile_topology(L).items()}  # rows of g's tiles
     face = jnp.asarray(topo["face"]).reshape((-1,) + (1,) * (uFld.ndim - 3))
 
     def P(a, j, i):

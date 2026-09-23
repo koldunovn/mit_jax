@@ -57,6 +57,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from mitgcm_jax.layout import Layout
+from mitgcm_jax.parallel.tiles import tile_index, tile_rows
 from mitgcm_jax.params_io import params_pytree
 
 # GAD.h:48 ENUM_DST3 = 30 (3rd order direct space-time)
@@ -554,5 +555,6 @@ def gad_advection(params, g, uFld, vFld, wFld, tracer, hFacW, hFacS, recip_hFacC
         raise NotImplementedError("GADParams outside the ported branches")
     grid2d = {k: getattr(g, k) for k in GRID2D}
     vgrid = {k: getattr(g, k) for k in VGRID}
-    return advect_tiles(params, gad_tables(params), grid2d, vgrid, jnp.asarray(uFld), jnp.asarray(vFld),
+    tables = {k: tile_rows(v, tile_index(g)) for k, v in gad_tables(params).items()}  # rows of g's tiles
+    return advect_tiles(params, tables, grid2d, vgrid, jnp.asarray(uFld), jnp.asarray(vFld),
                         jnp.asarray(tracer), jnp.asarray(hFacW), jnp.asarray(hFacS), jnp.asarray(recip_hFacC))

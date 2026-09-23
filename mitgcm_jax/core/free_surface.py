@@ -197,8 +197,10 @@ def calc_r_star(p: FreeSurfParams, g, ex, etaFld, rStarFacC, rStarFacW, rStarFac
     J, I = L.js(1, L.sNy + 1), L.is_(1, L.sNx + 1)
     lowC, lowW, lowS = rC[:, J, I] < p.hFacInf, rW[:, J, I] < p.hFacInf, rS[:, J, I] < p.hFacInf
     highC = rC[:, J, I] > p.hFacSup
-    out.update(icntc1=jnp.sum(lowC), icntw=jnp.sum(lowW), icnts=jnp.sum(lowS), icntc2=jnp.sum(highC),
-               maxhFacC=jnp.max(jnp.where(highC, rC[:, J, I], 0.0)))
+    # per-tile counts (as the Fortran tile loop), summed over all tiles through the exchanger (any decomposition)
+    cnt = lambda m: ex.global_sum_tile(jnp.sum(m, axis=(1, 2)))  # noqa: E731
+    out.update(icntc1=cnt(lowC), icntw=cnt(lowW), icnts=cnt(lowS), icntc2=cnt(highC),
+               maxhFacC=ex.global_max(jnp.where(highC, rC[:, J, I], 0.0)))
     rC = ex.exch_xy(rC)                                           # :262 _EXCH_XY_RL
     rW, rS = ex.exch_uv_xy(rW, rS, False)                         # :263 EXCH_UV_XY_RL(.FALSE.)
     # :301-316 full range (W2_FILL_NULL_REGIONS undefined)
@@ -241,7 +243,7 @@ def integr_continuity(p: FreeSurfParams, g, ex, uFld, vFld, hFacW, hFacS, EmPmR,
     # :95-131 hDivFlow = 0; DO k=1,Nr: hDivFlow = hDivFlow + maskC*div  (sequential in k)
     def acc(h, t):
         return h + t, None
-    hDivFlow, _ = lax.scan(acc, jnp.zeros((L.nTiles, L.sNy, L.sNx)),
+    hDivFlow, _ = lax.scan(acc, jnp.zeros_like(div[:, 0]),   # zeros [T, sNy, sNx], typed like div (shard_map)
                            jnp.moveaxis(g.maskC[:, :, J, I] * div, 1, 0))
 
     # :167-182 (myIter != nIter0): PmEpR = -EmPmR on the full range; dEtaHdt on the interior
