@@ -338,3 +338,16 @@ Production runs may use XLA defaults (ulp-level differences only).
   hold values like HSNOW = -1.2e-240: the limiter ratio uses a quotient-rule custom_jvp (forward = the same IEEE
   division). Stacked fields share the uTrans cotangent, so one NaN lane poisons every field's gradient.
 - At limiter kinks JAX splits the derivative 0.5/0.5 — a convention, not TAF's value (relevant for M3).
+
+## M2.3 — sea-ice thermodynamics (2026-09-23, sub-agent)
+- V4r4 SEAICE_GROWTH override + SEAICE_SOLVE4TEMP + SEAICE_BUDGET_OCEAN bitwise vs full_jaxdump_v5 at every dumped
+  stage (H01-H06, I04; it 1-3), replayed per stage and composed; SEAICE_multDim=1 so only category 1 is computed.
+- The oracle's transcendentals can block bitwise: gfortran calls glibc 2.28's ifunc-selected FMA exp (not correctly
+  rounded), XLA's exp is 1-2 ulp off at ~14 % of arguments. `glibc_exp` transcribes glibc's algorithm with FMA
+  emulated exactly (0 mismatches in 1.4e7 values); `jnp.exp` stays available for production runs. algsimp folds
+  `(c + t) - c` to `t`, so shift-trick results are read from the integer bit pattern.
+- A fixed Newton count (IMAX_TICE=10) is visible only to a bitwise gate (9 vs 10 steps: 9e-15).
+- `cpp -traditional` with line markers and the build's flags gives the active branches with .F line numbers directly.
+- ecco mode (open for Nikolay): with useSEAICEinAdMode=F TAF skips the IF(useSEAICE) blocks in the reverse sweep, so
+  adjoints of what sea ice overwrote (Qnet, EmPmR, saltFlux) pass through as if the package were the identity — not a
+  stop_gradient. The kernel gives the exact derivative for now.
