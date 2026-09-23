@@ -23,6 +23,7 @@ MANIFEST = {
     "scripts/tests/test_check_pytest_report.py": "smoke",
     "scripts/tests/test_overrides.py": "tier1",
     "scripts/tests/test_data_manifest.py": "tier1",
+    "scripts/tests/test_llc_layout.py": "tier1",
     "mitgcm_jax/tests/test_io_readers.py": "smoke",
 }
 
