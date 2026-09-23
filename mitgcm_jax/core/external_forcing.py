@@ -1,10 +1,20 @@
-"""EXTERNAL_FORCING_SURF as called at the start of DO_OCEANIC_PHYS (plan Task 9).
+"""EXTERNAL_FORCING_SURF as called at the start of DO_OCEANIC_PHYS (plan Task 9; full tree M2.6a).
 
-Literal port of c66g `model/src/external_forcing_surf.F` (not overridden) with the calls that precede it in the
-flux-forced `DO_OCEANIC_PHYS` (ff/do_oceanic_phys.F:288-300, 578-614): saltPlumeDepth zeroed (ALLOW_AUTODIFF,
-saltPlumeFlux kept: READIN_SALT_PLUME_FLUX), SALT_PLUME_DO_EXCH, then EXTERNAL_FORCING_SURF over the whole array
-(iMin = 1-OLx ... jMax = sNy+OLy, ff/do_oceanic_phys.F:594-597), including SALT_PLUME_FORCING_SURF
-(pkg/salt_plume/salt_plume_forcing_surf.F, SALT_PLUME_VOLUME undef).
+Literal port of c66g `model/src/external_forcing_surf.F` (not overridden) with the calls that precede it in
+`DO_OCEANIC_PHYS`, over the whole array (iMin = 1-OLx ... jMax = sNy+OLy, ff/do_oceanic_phys.F:594-597, c66g
+:588-591), including SALT_PLUME_FORCING_SURF (pkg/salt_plume/salt_plume_forcing_surf.F, SALT_PLUME_VOLUME undef).
+The two V4r4 trees differ before EXTERNAL_FORCING_SURF:
+  flux-forced (ff/do_oceanic_phys.F, READIN_SALT_PLUME_FLUX, useSEAICE = F):
+      :288-300  saltPlumeDepth = 0 (ALLOW_AUTODIFF); saltPlumeFlux kept (read from spflx by EXF_MAPFIELDS)
+      :581      SALT_PLUME_DO_EXCH           :612  EXTERNAL_FORCING_SURF
+  full (c66g model/src/do_oceanic_phys.F, useSEAICE = T):
+      :286-298  saltPlumeDepth = 0 and saltPlumeFlux = 0 (ALLOW_AUTODIFF, ALLOW_SALT_PLUME)
+      :476      SEAICE_MODEL (sets Qnet, Qsw, EmPmR, saltFlux, fu, fv under ice, sIceLoad, saltPlumeFlux: pkgs/seaice_*)
+      :575      SALT_PLUME_DO_EXCH           :606  EXTERNAL_FORCING_SURF
+`oceanic_phys_pre_seaice` / `oceanic_phys_post_seaice` are the two halves (the full tree calls SEAICE_MODEL between
+them); `oceanic_phys_forcing` is their composition for the flux-forced tree (no SEAICE_MODEL). useSEAICE enters
+EXTERNAL_FORCING_SURF itself only in the balanceEmPmR / balanceQnet tests (external_forcing_surf.F:87, 91), both off.
+The tree is recognised by READIN_SALT_PLUME_FLUX (`readin_salt_plume_flux`).
 
 Branches taken with the V4r4 namelists (anything else raises NotImplementedError in `SurfForcingParams`):
 balanceEmPmR = balanceQnet = F (no REMOVE_MEAN), no surface relaxation (doThetaClimRelax = doSaltClimRelax = F since
@@ -36,6 +46,8 @@ class SurfForcingParams:
     useSALT_PLUME: bool
     temp_EvPrRn_set: bool     # temp_EvPrRn .NE. UNSET_RL (external_forcing_surf.F:257)
     salt_EvPrRn_set: bool     # salt_EvPrRn .NE. UNSET_RL (external_forcing_surf.F:268)
+    useSEAICE: bool = False   # full tree: SEAICE_MODEL between oceanic_phys_pre_seaice and oceanic_phys_post_seaice
+    zero_salt_plume_flux: bool = False   # c66g do_oceanic_phys.F:293 (not READIN_SALT_PLUME_FLUX, ff :293-295)
 
     @classmethod
     def from_namelists(cls, nml):
@@ -59,10 +71,15 @@ class SurfForcingParams:
         if not (nonlin > 0 and g("useRealFreshWaterFlux", False)):     # set_defaults.F:258; external_forcing_surf.F:250
             raise NotImplementedError("only nonlinFreeSurf > 0 with useRealFreshWaterFlux is ported "
                                       "(external_forcing_surf.F:250-343)")
-        for key in ("usePTRACERS", "useSHELFICE", "useSEAICE", "useThSIce", "useCoupler", "useFRAZIL", "useICEFRONT",
-                    "useOBCS"):
+        for key in ("usePTRACERS", "useSHELFICE", "useThSIce", "useCoupler", "useFRAZIL", "useICEFRONT", "useOBCS"):
             if pkg(key, False):
                 raise NotImplementedError(f"{key}=T: its surface-forcing path is not ported")
+        # useSEAICE (full tree): SEAICE_MODEL modifies the FFIELDS before EXTERNAL_FORCING_SURF (pkgs/seaice_*);
+        # inside EXTERNAL_FORCING_SURF it appears only with balanceEmPmR / balanceQnet (:87, :91; both refused above)
+        useSEAICE = bool(pkg("useSEAICE", False))
+        readin = readin_salt_plume_flux(nml)
+        if useSEAICE and readin:
+            raise NotImplementedError("useSEAICE with READIN_SALT_PLUME_FLUX (spflxfile): not a V4r4 build")
         if g("allowFreezing", False):                              # set_defaults.F:215; ff/do_oceanic_phys.F:586
             raise NotImplementedError("allowFreezing=T: FREEZE_SURFACE not ported")
         rhoNil = g("rhoNil", 999.8)                                                      # set_defaults.F:106
@@ -76,7 +93,17 @@ class SurfForcingParams:
                    gravity=float(g("gravity", 9.81)),                                    # set_defaults.F:104
                    temp_EvPrRn=temp_EvPrRn, salt_EvPrRn=salt_EvPrRn,
                    useSALT_PLUME=bool(pkg("useSALT_PLUME", False)),
-                   temp_EvPrRn_set=temp_EvPrRn != UNSET_RL, salt_EvPrRn_set=salt_EvPrRn != UNSET_RL)
+                   temp_EvPrRn_set=temp_EvPrRn != UNSET_RL, salt_EvPrRn_set=salt_EvPrRn != UNSET_RL,
+                   useSEAICE=useSEAICE, zero_salt_plume_flux=not readin)
+
+
+def readin_salt_plume_flux(nml):
+    """READIN_SALT_PLUME_FLUX (ff EXF_OPTIONS.h:189): defined only in the flux-forced build, whose EXF_NML_02 has the
+    extra key spflxfile (ff exf_readparms.F:120) and whose data.exf sets it; the full build has no such namelist
+    entry (its EXF_NML_02 read would stop on it). The key's presence in the run's data.exf is therefore the
+    run-directory signature of the build option; it is used where the option changes code: DO_OCEANIC_PHYS keeps
+    saltPlumeFlux (ff/do_oceanic_phys.F:293-295) instead of zeroing it (c66g do_oceanic_phys.F:293)."""
+    return nml.has("data.exf", "exf_nml_02", "spflxfile")
 
 
 def salt_plume_do_exch(p, ex, saltPlumeFlux):
@@ -119,12 +146,37 @@ def external_forcing_surf(p, g, fu, fv, Qnet, Qsw, EmPmR, saltFlux, saltPlumeFlu
 
 
 def oceanic_phys_forcing(p, g, ex, ff, saltPlumeDepth, theta, salt):
-    """DO_OCEANIC_PHYS up to and including EXTERNAL_FORCING_SURF (ff/do_oceanic_phys.F:288-614):
+    """DO_OCEANIC_PHYS up to and including EXTERNAL_FORCING_SURF of the flux-forced tree (ff/do_oceanic_phys.F:288-614):
     saltPlumeDepth = 0 (:292), SALT_PLUME_DO_EXCH (:581), EXTERNAL_FORCING_SURF (:612).
-    ff: FFIELDS dict (fu, fv, Qnet, Qsw, EmPmR, saltFlux, saltPlumeFlux, pLoad, sIceLoad). Returns (ff, out, depth)."""
+    ff: FFIELDS dict (fu, fv, Qnet, Qsw, EmPmR, saltFlux, saltPlumeFlux, pLoad, sIceLoad). Returns (ff, out, depth).
+    The full tree (useSEAICE) calls SEAICE_MODEL in between: use oceanic_phys_pre_seaice / oceanic_phys_post_seaice."""
+    if p.useSEAICE or p.zero_salt_plume_flux:
+        raise ValueError("full-tree DO_OCEANIC_PHYS: oceanic_phys_pre_seaice, SEAICE_MODEL, oceanic_phys_post_seaice")
     saltPlumeDepth = jnp.zeros_like(saltPlumeDepth)                                      # ff/do_oceanic_phys.F:292
     ff = dict(ff)
     ff["saltPlumeFlux"] = salt_plume_do_exch(p, ex, ff["saltPlumeFlux"])                # ff/do_oceanic_phys.F:581
     out = external_forcing_surf(p, g, ff["fu"], ff["fv"], ff["Qnet"], ff["Qsw"], ff["EmPmR"], ff["saltFlux"],
                                 ff["saltPlumeFlux"], ff["pLoad"], ff["sIceLoad"], theta, salt)
     return ff, out, saltPlumeDepth
+
+
+def oceanic_phys_pre_seaice(p, ff, saltPlumeDepth):
+    """DO_OCEANIC_PHYS before SEAICE_MODEL: the ALLOW_AUTODIFF zeroing (c66g do_oceanic_phys.F:286-298, full range
+    1-OLx..sNx+OLx): saltPlumeDepth = 0 (:292) and, unless READIN_SALT_PLUME_FLUX (ff :293-295), saltPlumeFlux = 0
+    (:293). Returns (ff, saltPlumeDepth)."""
+    saltPlumeDepth = jnp.zeros_like(saltPlumeDepth)                                      # :292
+    ff = dict(ff)
+    if p.zero_salt_plume_flux:
+        ff["saltPlumeFlux"] = jnp.zeros_like(ff["saltPlumeFlux"])                        # :293
+    return ff, saltPlumeDepth
+
+
+def oceanic_phys_post_seaice(p, g, ex, ff, theta, salt):
+    """DO_OCEANIC_PHYS after SEAICE_MODEL up to and including EXTERNAL_FORCING_SURF: SALT_PLUME_DO_EXCH (c66g
+    do_oceanic_phys.F:573-576, ff :579-582), EXTERNAL_FORCING_SURF (c66g :606-608, ff :612-614; allowFreezing = F,
+    no SHELFICE / ICEFRONT / FRAZIL). ff: FFIELDS dict after SEAICE_MODEL. Returns (ff, out)."""
+    ff = dict(ff)
+    ff["saltPlumeFlux"] = salt_plume_do_exch(p, ex, ff["saltPlumeFlux"])
+    out = external_forcing_surf(p, g, ff["fu"], ff["fv"], ff["Qnet"], ff["Qsw"], ff["EmPmR"], ff["saltFlux"],
+                                ff["saltPlumeFlux"], ff["pLoad"], ff["sIceLoad"], theta, salt)
+    return ff, out

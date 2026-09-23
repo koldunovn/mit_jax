@@ -11,6 +11,10 @@ Achieved (XLA_FLAGS --xla_cpu_max_isa=AVX from conftest.py, parameters traced): 
 phiHydF, dPhiHydX, dPhiHydY (all 50 levels), totPhiHyd and phiHydLow at iterations 1-2 (SMOKE) and 1-3 (FORCED).
 With XLA's default FMA contraction dPhiHydX/Y differ by 2e-13 relative (1-ulp phiHydC differences amplified by the
 horizontal difference of large phiHydC*rStarFacC), which is why the gate needs the no-FMA flag.
+Full V4r4 tree (oracle.FULL, iterations 1-3; M2.6a): the same gate. phi0surf there carries the sea-ice load
+(phi0surf = (pLoad + sIceLoad*gravity)/rhoConst, external_forcing_surf.F:356-366, sIceLoad from SEAICE_GROWTH); the
+full-tree dynamics.F override differs from c66g only in two diagnostics fills. Bitwise (measured 2026-09-23);
+negative control: phi0surf without its sIceLoad term fails totPhiHyd/phiHydLow.
 """
 
 import dataclasses
@@ -25,7 +29,7 @@ from mitgcm_jax.grid.geometry import grid_from_dump
 from mitgcm_jax.params_io import RunNamelists
 from mitgcm_jax.tests import oracle
 
-ORACLES = [oracle.SMOKE, oracle.FORCED]
+ORACLES = [oracle.SMOKE, oracle.FORCED, oracle.FULL]
 TOL = 0.0          # achieved: bitwise equality on every field, point, level and iteration of both oracles
 TOL_CLASS = 1e-13  # KERNEL_GUIDE class of stencils / vertical integrals: planted errors must exceed it
 
@@ -203,3 +207,20 @@ def test_phi_hyd_gradient(forced):
                               (1e-2, 1e-3, 1e-4, 1e-5), (wX, wT, one))
         print("rStarFacC", (t, j, i), rows)
         assert best < 1e-8, rows
+
+
+def test_full_ice_load_enters_phi_hyd(cases):
+    """Full tree: the replay passes with the dumped phi0surf; removing the sea-ice load from it (phi0surf -
+    sIceLoad*gravity/rhoConst, i.e. pLoad/rhoConst) fails totPhiHyd and phiHydLow (the load is present)."""
+    if oracle.FULL not in cases:
+        cases[oracle.FULL] = make_case(oracle.FULL)
+    case = cases[oracle.FULL]
+    it = case["its"][0]
+    assert max(errors(case, run_phi(case, it), it).values()) <= TOL
+    ds, nml = case["ds"], case["nml"]
+    sIceLoad = oracle.field(ds, it, "S04_oceanic_phys", "sIceLoad")
+    pLoad = oracle.field(ds, it, "S04_oceanic_phys", "pLoad")
+    rhoConst = float(nml.get("data", "parm01", "rhoConst", default=nml.get("data", "parm01", "rhoNil", default=999.8)))
+    assert np.abs(sIceLoad).max() > 100.0
+    bad = errors(case, run_phi(case, it, phi0surf=pLoad * (1.0 / rhoConst)), it)
+    assert bad["totPhiHyd"] > TOL_CLASS and bad["phiHydLow"] > TOL_CLASS, bad

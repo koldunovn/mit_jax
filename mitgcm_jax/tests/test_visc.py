@@ -11,6 +11,7 @@ import dataclasses
 
 import jax
 import numpy as np
+import pytest
 
 from mitgcm_jax.pkgs import mom_common as mc
 from mitgcm_jax.tests import oracle
@@ -88,10 +89,12 @@ def test_gibraltar_region():
     np.testing.assert_array_equal(with_f[3], without[3])
 
 
-def test_gibraltar_replay_negative_control():
+@pytest.mark.parametrize("name", [oracle.SMOKE, oracle.FULL])
+def test_gibraltar_replay_negative_control(name):
     """MOM_VECINV with the viscosity lacking the Gibraltar factor fails the oracle gate on guDissip and gvDissip,
-    and only at points next to the box (within 1.5 degrees); gU/gV are unaffected (bitwise)."""
-    name, it = oracle.SMOKE, 1
+    and only at points next to the box (within 1.5 degrees); gU/gV are unaffected (bitwise). Flux-forced (SMOKE)
+    and full V4r4 tree (the same mom_calc_visc.F override, code/ = flux-forced/code/)."""
+    it = 1
     p = params(name)
     g = grid(name)
     inp, ref = case(name, it)

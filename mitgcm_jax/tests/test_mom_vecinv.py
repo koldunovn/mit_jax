@@ -8,6 +8,10 @@ Measured (2026-09-23): bitwise equal (0 differing points of 6242600 per field) a
 conftest flags (--xla_cpu_max_isa=AVX --xla_disable_hlo_passes=algsimp; parameters passed as traced jit arguments);
 with XLA's default FMA contraction max rel. error 4.8e-16 (gV, SMOKE it 1). The gate asserts
 max|diff| <= 1e-15 * max|ref| and, when the no-FMA flag is set, bitwise equality.
+Full V4r4 tree (oracle.FULL, iterations 1-3; M2.6a): the same gate (the full tree runs c66g mom_vecinv.F /
+mom_vi_hdissip.F, whose ff overrides only add diagnostics; mom_calc_visc.F is the same override in both trees, with
+the Gibraltar x10 factor). Bitwise (measured 2026-09-23); the Gibraltar negative control (test_visc.py) also runs on
+the full tree.
 """
 
 import dataclasses
@@ -26,7 +30,8 @@ from mitgcm_jax.pkgs import mom_common as mc
 from mitgcm_jax.pkgs import mom_vecinv as mv
 from mitgcm_jax.tests import oracle
 
-CASES = [(oracle.SMOKE, 1), (oracle.SMOKE, 2), (oracle.FORCED, 1), (oracle.FORCED, 2), (oracle.FORCED, 3)]
+CASES = [(oracle.SMOKE, 1), (oracle.SMOKE, 2), (oracle.FORCED, 1), (oracle.FORCED, 2), (oracle.FORCED, 3),
+         (oracle.FULL, 1), (oracle.FULL, 2), (oracle.FULL, 3)]
 OUT = ("gU", "gV", "guDissip", "gvDissip")
 IN = ("uVel", "vVel", "wVel", "hFacC", "hFacW", "hFacS", "recip_hFacC", "recip_hFacW", "recip_hFacS",
       "kappaRU", "kappaRV")
@@ -39,12 +44,12 @@ RTOL = 1e-15
 NO_FMA = "xla_cpu_max_isa=AVX" in os.environ.get("XLA_FLAGS", "")
 
 
-@functools.lru_cache(maxsize=2)
+@functools.lru_cache(maxsize=3)
 def params(name):
     return mv.MomVecinvParams.from_namelists(RunNamelists(oracle.run_dir(name)))
 
 
-@functools.lru_cache(maxsize=2)
+@functools.lru_cache(maxsize=3)
 def grid(name):
     """The geometry MOM_VECINV reads (G00_geometry of iteration 1; only the needed fields)."""
     ds, L = oracle.dumpset(name), Layout()

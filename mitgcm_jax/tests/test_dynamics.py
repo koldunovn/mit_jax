@@ -14,6 +14,12 @@ Achieved (XLA_FLAGS --xla_cpu_max_isa=AVX from conftest.py, parameters as traced
 kappaRU/kappaRV, gU/gV after TIMESTEP, guNm/gvNm, gU/gV after IMPLDIFF and the driver's S05 fields, at iterations 1-2
 (SMOKE) and 1-3 (FORCED). Before the parameters were traced, XLA simplified viscArNr + (GGL90viscArU - viscArNr) to
 GGL90viscArU (720 points 1 ulp off) and reassociated the constant deltaTMom in IMPLDIFF's a/c (59675 points, 5e-16).
+Full V4r4 tree (oracle.FULL, iterations 1-3; M2.6a): the same gates. The momentum forcing surfaceForcingU/V (S04)
+there includes the sea-ice ocean stress (SEAICE_OCEAN_STRESS inside SEAICE_MODEL); DYNAMICS / TIMESTEP / IMPLDIFF
+take the c66g branches of the flux-forced port (the full tree's dynamics.F override adds two diagnostics fills; the
+ff overrides of apply_forcing / impldiff / momentum_correction_step are diagnostics-only and not used by the full
+tree). Bitwise (measured 2026-09-23); negative control: the momentum forcing without the ice stress (S02 values,
+before SEAICE_MODEL) fails the TIMESTEP gate.
 """
 
 import dataclasses
@@ -33,7 +39,7 @@ from mitgcm_jax.params_io import RunNamelists
 from mitgcm_jax.tests import oracle
 from mitgcm_jax.tests.test_phi_hyd import dynamics_inputs, fd_check, relerr, wet_points
 
-ORACLES = [oracle.SMOKE, oracle.FORCED]
+ORACLES = [oracle.SMOKE, oracle.FORCED, oracle.FULL]
 TOL = 0.0           # achieved: bitwise on every gate (see module docstring)
 TOL_POINT = 1e-15   # KERNEL_GUIDE class of pointwise maps (kappa, AB3 + TIMESTEP): planted errors must exceed it
 TOL_CLASS = 1e-13   # KERNEL_GUIDE class of the tridiagonal solve / vertical integrals
@@ -325,3 +331,19 @@ def test_dynamics_gradient(forced):
                           (t, k, j, i), tuple(v0 * r for r in (1e-2, 1e-3, 1e-4, 1e-5)), (wU, wV))
     print("GGL90viscArU", (t, k, j, i), rows)
     assert best < 1e-6, rows
+
+
+def test_full_negative_control_ice_stress(cases):
+    """Full tree: TIMESTEP with surfaceForcingU/V of S02_load_fields (the EXF stress before SEAICE_MODEL replaced it
+    under ice) fails the D01 gU/gV comparison; with the S04 values it passes."""
+    if oracle.FULL not in cases:
+        cases[oracle.FULL] = make_case(oracle.FULL)
+    case = cases[oracle.FULL]
+    it = case["its"][0]
+    s = inputs(case, it)
+    assert max(timestep_errors(case, it, s=s).values()) <= TOL
+    ds = case["ds"]
+    pre = {n: oracle.field(ds, it, "S02_load_fields", n) for n in ("surfaceForcingU", "surfaceForcingV")}
+    assert not np.array_equal(pre["surfaceForcingU"], s["surfaceForcingU"])
+    e = timestep_errors(case, it, s=dict(s, **pre))
+    assert e["gU"] > TOL_POINT and e["gV"] > TOL_POINT, e

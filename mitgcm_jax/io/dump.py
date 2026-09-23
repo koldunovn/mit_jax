@@ -86,9 +86,15 @@ def read_file(path, lazy=False):
 
 
 class DumpSet:
-    """All records under a dump directory, indexed by (iter, stage, field) -> {tile: Record}."""
+    """All records under a dump directory, indexed by (iter, stage, field) -> {tile: Record}.
 
-    def __init__(self, directory):
+    The record headers of the files are read in `threads` parallel threads (a serial index of a full-tree oracle
+    takes ~110 s on cold Lustre, ~3 ms per header); the index and the key order are built afterwards in the same
+    file order as a serial read, so they do not depend on `threads`."""
+
+    def __init__(self, directory, threads=32):
+        from concurrent.futures import ThreadPoolExecutor
+
         self.dir = Path(directory)
         self.index = {}
         self.order = []  # (iter, stage, field) in first-seen call order per iteration
@@ -99,10 +105,12 @@ class DumpSet:
         for f in files:
             m = re.fullmatch(r"jd_(\d{10})_t(\d{4})\.bin", f.name)
             per_iter_tile.setdefault(int(m.group(1)), []).append(f)
+        with ThreadPoolExecutor(max(1, min(threads, len(files)))) as pool:
+            headers = dict(zip(files, pool.map(lambda f: read_file(f, lazy=True), files)))
         for it in sorted(per_iter_tile):
             first = True
             for f in sorted(per_iter_tile[it]):
-                for r in read_file(f, lazy=True):
+                for r in headers[f]:
                     key = (r.iter, r.stage, r.field)
                     if key not in self.index:
                         self.index[key] = {}

@@ -20,6 +20,11 @@ compared fields is BITWISE equal to the dump in all 5 cases (max rel. error 0), 
 the tolerance classes (1e-15 pointwise, 1e-13 stencil) remain the bound the negative controls must exceed.
 Without --xla_disable_hlo_passes=algsimp the r* divisions (recip_hFacC/rStarExpC, gT/rStarExpC) become multiplications
 by 1/rStarExpC: 1-ulp differences, grown to ~6e-14 relative by the implicit solve (measured).
+Full V4r4 tree (oracle.FULL, iterations 1-3; M2.6a): the same 17 comparisons. Its forcing (S04) carries the sea-ice
+modified Qnet/Qsw/EmPmR/saltFlux, the brine-rejection salt plume (SEAICE_GROWTH) and, unlike the FORCED oracle, the
+geothermal flux (geothermalFile set: read as model.setup does). The ocean tracer code takes the same branches (gcov:
+only diagnostics fills differ in temp/salt_integrate, gad_implicit_r, salt_plume_tendency_apply_s). Bitwise (measured
+2026-09-23); negative controls on the full tree: geothermal flux dropped fails theta, salt plume dropped fails salt.
 """
 
 import dataclasses
@@ -38,7 +43,8 @@ from mitgcm_jax.params_io import RunNamelists
 from mitgcm_jax.tests import oracle
 
 # FORCED it=1 last: the later tests reuse its cached run
-CASES = [(oracle.SMOKE, 1), (oracle.SMOKE, 2), (oracle.FORCED, 2), (oracle.FORCED, 3), (oracle.FORCED, 1)]
+CASES = [(oracle.FULL, 1), (oracle.FULL, 2), (oracle.FULL, 3), (oracle.SMOKE, 1), (oracle.SMOKE, 2),
+         (oracle.FORCED, 2), (oracle.FORCED, 3), (oracle.FORCED, 1)]
 TOL_POINTWISE = 1e-15
 TOL_STENCIL = 1e-13
 
@@ -66,11 +72,14 @@ def _F(ds, it, stage, name):
 
 
 def _geothermal(nml, g):
-    # geothermalFile = ' ' in both oracles: geothermalFlux stays 0 (ini_forcing / FFIELDS.h); a later oracle with a
-    # geothermal file must load it here
+    # geothermalFile = ' ' in SMOKE/FORCED: geothermalFlux stays 0 (ini_forcing / FFIELDS.h); the full oracle sets it:
+    # read + EXCH_XY_RS as model.setup does (ini_forcing.F:141-150)
     f = nml.get("data", "parm05", "geothermalFile", default=" ").strip()
-    assert f == "", f"geothermalFile={f!r}: load the field for this oracle"
-    return np.zeros(g.rA.shape)
+    if f == "":
+        return np.zeros(g.rA.shape)
+    from mitgcm_jax.model import _extra_grid_fields
+    from mitgcm_jax.parallel.exchange import default_exchanger
+    return np.asarray(_extra_grid_fields(nml, g, default_exchanger(g.layout), nml.dir)["geothermalFlux"])
 
 
 @functools.lru_cache(maxsize=1)
@@ -216,6 +225,22 @@ def test_negative_controls():
     k2 = th.calc_3d_diffusivity(dataclasses.replace(p, ivdc_kappa=p.ivdc_kappa * (1 + 1e-6)), g, th.GAD_TEMPERATURE,
                                 f["IVDConvCount"], f["diffKr"], f["GGL90diffKr"], f["Kwz"])
     assert _relerr(k2, ref("T13_temp_impl", "kappaRk")) > TOL_POINTWISE
+
+
+def test_full_negative_controls():
+    """Full tree, iteration 1: geothermal flux dropped fails theta (T02); salt plume dropped fails the salt tendency
+    (T21); the unmodified replay passes."""
+    name, it = oracle.FULL, 1
+    ds, nml, g, p = _setup(name)
+    ref = lambda st, n: _F(ds, it, st, n)  # noqa: E731
+    _, o = _replay(name, it)
+    assert np.array_equal(o["theta"], ref("T02_temp_integrate", "theta"))
+    f, _, _ = _inputs(name, it)
+    assert np.abs(f["geothermalFlux"]).max() > 0 and np.abs(f["saltPlumeFlux"]).max() > 0
+    _, o = _replay(name, it, mutate=lambda f: f.update(geothermalFlux=np.zeros_like(f["geothermalFlux"])))
+    assert _relerr(o["theta"], ref("T02_temp_integrate", "theta")) > 0.0
+    _, o = _replay(name, it, mutate=lambda f: f.update(saltPlumeFlux=np.zeros_like(f["saltPlumeFlux"])))
+    assert _relerr(o["S_gExplicit"], ref("T21_salt_gS", "gS_loc")) > TOL_STENCIL
 
 
 # ------------------------------------------------------------------------------------------------ budget closure

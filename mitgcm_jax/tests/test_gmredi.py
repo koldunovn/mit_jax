@@ -12,6 +12,9 @@ argument): bitwise, max relative error 0, for every field, iteration and oracle 
 equality). With algsimp enabled Kuz/Kvz differ by 1 ulp at ~66e3 points (A/sqrt(B) -> A*rsqrt(B)).
 Negative controls: a 1e-6 relative change of slopeMax, slopeMaxSpec or GM_Kmin_horiz, a dropped maskp1, an unsigned
 exchange, and a dropped GM term each fail the corresponding comparison.
+Full V4r4 tree (oracle.FULL, iterations 1-3; M2.6a): the same four gates; the GMREDI code path is the same (gcov: only
+diagnostics fills differ; kapGM/kapRedi/diffKr carry the full tree's ctrl adjustments, read from G00/S04).
+Bitwise (measured 2026-09-23); negative control: the slopeMax plant fails P05 on the full tree too.
 """
 
 import dataclasses
@@ -28,8 +31,10 @@ from mitgcm_jax.parallel.exchange import default_exchanger
 from mitgcm_jax.pkgs import gmredi
 from mitgcm_jax.tests import oracle
 
-CASES = [(oracle.SMOKE, 1), (oracle.SMOKE, 2), (oracle.FORCED, 1), (oracle.FORCED, 2), (oracle.FORCED, 3)]
-IDS = [f"{'smoke' if n == oracle.SMOKE else 'forced'}-it{it}" for n, it in CASES]
+CASES = [(oracle.SMOKE, 1), (oracle.SMOKE, 2), (oracle.FORCED, 1), (oracle.FORCED, 2), (oracle.FORCED, 3),
+         (oracle.FULL, 1), (oracle.FULL, 2), (oracle.FULL, 3)]
+_LABEL = {oracle.SMOKE: "smoke", oracle.FORCED: "forced", oracle.FULL: "full"}
+IDS = [f"{_LABEL[n]}-it{it}" for n, it in CASES]
 TENSOR = ("Kwx", "Kwy", "Kwz", "Kux", "Kvy", "Kuz", "Kvz", "GM_PsiX", "GM_PsiY")
 
 
@@ -226,6 +231,17 @@ def test_negative_controls(smoke1, monkeypatch):
     assert differs(uF, _fld(c["ds"], 1, "T01_residual_flow", "uFld"))
     # kappaRk without the GM term fails T13
     assert differs(kappaRk_expected(c, ref["Kwz"], with_gm=False), _fld(c["ds"], 1, "T13_temp_impl", "kappaRk"))
+
+
+def test_full_negative_control():
+    """Full tree, iteration 1: the P05 gate passes and slopeMax * (1 + 1e-6) fails it."""
+    c = load_case(oracle.FULL, 1)
+    p = c["p"]
+    out = tensor(p, c)
+    assert all(np.array_equal(out[n], c["P05"][n]) for n in TENSOR)
+    out = tensor(dataclasses.replace(p, slopeMax=p.slopeMax * (1 + 1e-6)), c)
+    assert all(differs(out[n], c["P05"][n]) for n in ("Kwx", "Kwy", "Kwz", "Kuz", "Kvz"))
+    c.clear()
 
 
 # ------------------------------------------------------------------------------------------------------ effect test

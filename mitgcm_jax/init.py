@@ -49,8 +49,22 @@ pkg/<pkg> unless marked ff = ECCOv4 Release 4/flux-forced/code):
 the_main_loop.F:363-406 AUTODIFF_STORE / AUTODIFF_RESTORE (ff): identity (every stored array is restored, checked
                                       by parsing both files; AUTODIFF_USE_OLDSTORE_2D/3D skip the DYNVARS copies)
 
-Not ported (hard error at set-up): useECCO, useProfiles, useSEAICE, nIter0 = 0 / pickupSuff / old-format pickups,
-tracer AB histories; ctrl branches other than ctrlUseGen=T generic controls with WC01 smoothing (pkgs/ctrl.py).
+Full V4r4 tree (plan M2.6a; initialise_varia.F is the same file in both trees, packages_init_variables.F is c66g):
+  - PACKAGES_INIT_VARIABLES also calls SEAICE_INIT_VARIA (packages_init_variables.F:336, after EXF_INIT_VARIA :249,
+    before SALT_PLUME_INIT_VARIA :342): pkgs/seaice_init.py -- pickup_seaice (siTICE, siAREA, siHEFF, siHSNOW,
+    siUICE, siVICE; TICES copied to all nITD categories), the exchanges, and sIceLoad = HEFF*rhoIce + HSNOW*rhoSnow
+    (seaice_init_varia.F:685-692; the only ocean field SEAICE_INIT_VARIA sets). The static HEFFM / k1AtC ... fields
+    are grid fields (model.setup). The State then also holds AREA, HEFF, HSNOW, TICES, UICE, VICE.
+  - EXF: the full tree's EXF_INIT_VARIA (bulk-formula EXF, pkgs/exf_full) touches only EXF_FIELDS arrays; until the
+    full-tree step is composed (M2.6b) model.setup leaves P.exf = None for the full tree and the State carries no
+    EXF_FIELDS arrays (hook: `init_inputs` returns exf = None; M2.6b passes pkgs/exf_full.exf_init_varia's fields).
+  - AUTODIFF_STORE / AUTODIFF_RESTORE (c66g pkg/autodiff/autodiff_store.F / autodiff_restore.F in the full tree)
+    restore every array they store (EXF records, sIceLoad, AREA, HEFF, HSNOW, UICE, VICE, ...): identity (gcov).
+  - useCTRL: the full data.ctrl has the same genarr controls as ff (xx_etan, xx_theta, xx_salt, xx_kapgm,
+    xx_kapredi, xx_diffkr, xx_uvel, xx_vvel; ctrl_map_ini_genarr.F is the same override file) and no gentim2d.
+Not ported (hard error at set-up): useECCO, useProfiles, nIter0 = 0 / pickupSuff / old-format pickups, tracer AB
+histories; ctrl branches other than ctrlUseGen=T generic controls with WC01 smoothing (pkgs/ctrl.py); sea-ice
+branches listed in pkgs/seaice_init.SeaiceInitConfig.
 
 CTRL (useCTRL=T with every mult_* = 0, as in production data.ctrl; plan Task 8b): mult_genarr2d/3d and mult_gentim2d
 weight only the cost terms (ctrl_cost_gen.F); ff ctrl_map_ini_genarr.F:83-152 does not read them. With ctrlUseGen=T
@@ -79,6 +93,7 @@ from mitgcm_jax.io.mds import read_mds
 from mitgcm_jax.params_io import RunNamelists
 from mitgcm_jax.pkgs import ctrl as ctrl_mod
 from mitgcm_jax.pkgs import exf_fluxforced as exf_mod
+from mitgcm_jax.pkgs import seaice_init as si_mod
 from mitgcm_jax.state import G00_STATE_FIELDS, S00_FIELDS, State
 
 PRECFLOAT64 = 64   # EEPARAMS.h precFloat64; read_pickup.F:104 fp = precFloat64, ggl90_read_pickup.F:59 prec
@@ -107,6 +122,7 @@ class InitConfig:
     useGMRedi: bool
     useSALT_PLUME: bool
     useCTRL: bool = False    # packages_boot.F; CTRL_INIT_VARIABLES (packages_init_variables.F:496-503)
+    useSEAICE: bool = False  # packages_boot.F; SEAICE_INIT_VARIA (packages_init_variables.F:336, pkgs/seaice_init.py)
 
     @classmethod
     def from_namelists(cls, nml):
@@ -141,7 +157,6 @@ class InitConfig:
              AB_TRACER_SCHEMES, "Adams-Bashforth on T/S (gad_init_fixed.F:147-165: GtNm/GsNm pickup records)"),
             (not pkg("useECCO"), "useECCO=T: ECCO_INIT_VARIA (ff ecco_init_varia.F) is not ported"),
             (not pkg("useProfiles"), "useProfiles=T: PROFILES_INIT_VARIA is not ported"),
-            (not pkg("useSEAICE"), "useSEAICE=T: SEAICE_INIT_VARIA is not ported"),
         ]
         for key in ("zonalWindFile", "meridWindFile", "surfQFile", "surfQnetFile", "EmPmRfile", "saltFluxFile",
                     "thetaClimFile", "saltClimFile", "lambdaThetaFile", "lambdaSaltFile", "surfQswFile",
@@ -160,7 +175,7 @@ class InitConfig:
                    readGuNm2=momStepping and beta_AB != 0.0,
                    m1=1 + (nIter0 + 1) % 2, m2=1 + nIter0 % 2,
                    useEXF=pkg("useEXF"), useGGL90=pkg("useGGL90"), useGMRedi=pkg("useGMRedi"),
-                   useSALT_PLUME=pkg("useSALT_PLUME"), useCTRL=pkg("useCTRL"))
+                   useSALT_PLUME=pkg("useSALT_PLUME"), useCTRL=pkg("useCTRL"), useSEAICE=pkg("useSEAICE"))
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -453,12 +468,13 @@ def integr_continuity_ini(p, g, ex, uFld, vFld, hFacW, hFacS, etaN, etaH, dEtaHd
     return dict(dEtaHdt=dEtaHdt, PmEpR=PmEpR, etaN=etaN, wVel=wVel, etaHnm1=etaHnm1, etaH=etaH)
 
 
-def initialise_varia(P, g, ex, kLowC, pk, tke, exf, ctrl_in=None):
-    """INITIALISE_VARIA (ff initialise_varia.F:123-298) for a pickup start. pk: interior arrays of READ_PICKUP
-    (read_pickup); tke: interior of pickup_ggl90, None when useGGL90=F (GGL90_INIT_VARIA not called); exf: the
-    EXF_FIELDS arrays of EXF_INIT_VARIA ({} when useEXF=F); ctrl_in: pkgs/ctrl.CtrlInit of the state controls
-    (None when useCTRL=F). Returns (fields, aux): fields = the State dict, aux = PmEpR, INI_CG2D's myNorm and the
-    calc_r_star.F:182-202 counters of both CALC_R_STAR calls."""
+def initialise_varia(P, g, ex, kLowC, pk, tke, exf, ctrl_in=None, ice=None):
+    """INITIALISE_VARIA (ff initialise_varia.F:123-298 = full code/initialise_varia.F) for a pickup start. pk:
+    interior arrays of READ_PICKUP (read_pickup); tke: interior of pickup_ggl90, None when useGGL90=F
+    (GGL90_INIT_VARIA not called); exf: the EXF_FIELDS arrays of EXF_INIT_VARIA ({} when useEXF=F; None: not
+    carried, full tree until M2.6b); ctrl_in: pkgs/ctrl.CtrlInit of the state controls (None when useCTRL=F); ice:
+    (SeaiceInitConfig, pickup_seaice interiors) when useSEAICE (full tree), else None. Returns (fields, aux): fields =
+    the State dict, aux = PmEpR, INI_CG2D's myNorm and the calc_r_star.F:182-202 counters of both CALC_R_STAR calls."""
     L = g.layout
     J, I = L.js(1, L.sNy), L.is_(1, L.sNx)
     z2, z3 = jnp.zeros_like(g.rA), jnp.zeros_like(g.h0FacC)
@@ -521,8 +537,16 @@ def initialise_varia(P, g, ex, kLowC, pk, tke, exf, ctrl_in=None):
     for n in ("Kwx", "Kwy", "Kwz", "Kux", "Kvy", "Kuz", "Kvz", "GM_PsiX", "GM_PsiY"):
         f[n] = z3
     # EXF_INIT_VARIA (ff exf_init_varia.F, packages_init_variables.F:244-251; evaluated by the caller, init_inputs)
-    for n in EXF_FIELDS:
-        f[n] = exf[n]
+    if exf is not None:
+        for n in EXF_FIELDS:
+            f[n] = exf[n]
+    # SEAICE_INIT_VARIA (packages_init_variables.F:334-337, useSEAICE; pkgs/seaice_init.py): the sea-ice state and
+    # sIceLoad (seaice_init_varia.F:685-692; INI_FFIELDS zeroed it above)
+    if ice is not None:
+        ice_state, sIceLoad = si_mod.seaice_init_varia(ice[0], g, ex, ice[1])
+        f.update(ice_state)
+        if sIceLoad is not None:
+            f["sIceLoad"] = sIceLoad
     # SALT_PLUME_INIT_VARIA (salt_plume_init_varia.F:45-52; SALT_PLUME_VOLUME undefined)
     f.update(saltPlumeDepth=z2, saltPlumeFlux=z2)
     # CTRL_INIT_VARIABLES (packages_init_variables.F:496-503, useCTRL) -> ff CTRL_MAP_INI_GENARR
@@ -559,21 +583,32 @@ def initialise_varia_jit(ex):
     """jax.jit(initialise_varia) for this exchanger (cached): call as f(P, g, kLowC, pk, tke, exf[, ctrl_in]) with
     the parameters as arguments (traced floats: KERNEL_GUIDE, params_pytree)."""
     if id(ex) not in _JIT:
-        _JIT[id(ex)] = (ex, jax.jit(lambda P, g, kLowC, pk, tke, exf, ctrl_in=None:
-                                    initialise_varia(P, g, ex, kLowC, pk, tke, exf, ctrl_in)))
+        _JIT[id(ex)] = (ex, jax.jit(lambda P, g, kLowC, pk, tke, exf, ctrl_in=None, ice=None:
+                                    initialise_varia(P, g, ex, kLowC, pk, tke, exf, ctrl_in, ice)))
     return _JIT[id(ex)][1]
 
 
 def init_inputs(P, rundir, cfg: InitConfig, L):
     """Host-side inputs of initialise_varia: (pk, tke, exf, info) -- READ_PICKUP, GGL90_READ_PICKUP (useGGL90) and
-    EXF_INIT_VARIA (useEXF)."""
+    EXF_INIT_VARIA (useEXF). exf is None for the full tree (P.exf is None until M2.6b: the EXF_FIELDS arrays are
+    then not part of the State)."""
     pk, info = read_pickup(rundir, cfg, L)
     tke = read_ggl90_pickup(rundir, cfg, L) if cfg.useGGL90 else None
-    if cfg.useEXF:
+    if cfg.useEXF and P.exf is None:        # full tree: pkgs/exf_full.exf_init_varia is wired in M2.6b
+        exf = None
+    elif cfg.useEXF:
         exf = exf_mod.exf_init_varia(P.exf, L)
     else:                                   # EXF_INIT_VARIA not called: the EXF_FIELDS common block stays 0
         exf = {n: jnp.zeros(L.shape2d) for n in EXF_FIELDS}
     return pk, tke, exf, info
+
+
+def seaice_inputs(rundir, cfg: InitConfig):
+    """Host-side inputs of SEAICE_INIT_VARIA (useSEAICE): (SeaiceInitConfig, pickup_seaice interiors), else None."""
+    if not cfg.useSEAICE:
+        return None
+    icfg = si_mod.SeaiceInitConfig.from_namelists(RunNamelists(rundir))
+    return icfg, {k: jnp.asarray(v) for k, v in si_mod.read_seaice_pickup(rundir, icfg).items()}
 
 
 def state_from_pickup(P, g, ex, kLowC, rundir, return_aux=False):
@@ -592,11 +627,16 @@ def state_from_pickup(P, g, ex, kLowC, rundir, return_aux=False):
     ctrl_in = None
     if cfg.useCTRL:        # CTRL_INIT_VARIABLES inputs (xx, weights, pkg/smooth operators; recip_hFacC of INI_MASKS_ETC)
         ctrl_in = ctrl_mod.ctrl_init(nml, g, ex, ctrl_mod.STATE_TARGETS, ini_recip_hfac(g.h0FacC))
-    f, aux = initialise_varia_jit(ex)(P, g, kLowC, pk, None if tke is None else jnp.asarray(tke), exf, ctrl_in)
+    ice = seaice_inputs(rundir, cfg)
+    f, aux = initialise_varia_jit(ex)(P, g, kLowC, pk, None if tke is None else jnp.asarray(tke), exf, ctrl_in, ice)
     for c in aux["rstar_checks"]:                                             # calc_r_star.F:148-190 STOP
         if int(c["icntc1"]) + int(c["icntw"]) + int(c["icnts"]) > 0:
             raise ValueError("CALC_R_STAR: too SMALL rStarFac[C,W,S] (calc_r_star.F:187-189 STOP)")
     missing = set(S00_FIELDS) | set(G00_STATE_FIELDS)
+    if exf is None:                         # full tree before M2.6b: EXF_FIELDS not carried (see init_inputs)
+        missing -= set(EXF_FIELDS)
+    if cfg.useSEAICE:
+        missing |= set(si_mod.ICE_STATE)
     missing -= set(f)
     if missing:
         raise RuntimeError(f"initialise_varia did not produce {sorted(missing)}")

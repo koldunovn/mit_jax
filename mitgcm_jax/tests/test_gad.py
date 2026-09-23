@@ -9,6 +9,9 @@ writes gTracer on every point (`gad_advection.F:784-789`).
 
 Measured (see test docstrings): JAX == Fortran bitwise on every point, all tiles, both tracers, SMOKE it 1-2 and
 FORCED it 1-3 (max rel. error 0).
+Full V4r4 tree (oracle.FULL, iterations 1-3; M2.6a): the same gate (the ocean tracers take the same GAD path; the
+full tree additionally runs GAD_DST3FL_ADV_X/Y for the sea-ice fields, pkgs/seaice_advdiff.py). Bitwise (measured
+2026-09-23); the global-conservation check and its facet-order negative control run on the full tree too.
 """
 
 import dataclasses
@@ -27,7 +30,8 @@ from mitgcm_jax.tests import oracle
 
 L = Layout()
 # SMOKE it 1 and FORCED it 1 last: the later tests reuse them from the case() cache (dump reads dominate the runtime)
-CASES = [(oracle.SMOKE, 2), (oracle.FORCED, 2), (oracle.FORCED, 3), (oracle.FORCED, 1), (oracle.SMOKE, 1)]
+CASES = [(oracle.FULL, 2), (oracle.FULL, 3), (oracle.FULL, 1), (oracle.SMOKE, 2), (oracle.FORCED, 2),
+         (oracle.FORCED, 3), (oracle.FORCED, 1), (oracle.SMOKE, 1)]
 TRACERS = {"temp": ("theta", "T10_temp_adv", "gT_loc"), "salt": ("salt", "T20_salt_adv", "gS_loc")}
 TR_STAGE = "S04_oceanic_phys"
 HFAC_STAGE = "S11_calc_rstar"
@@ -190,7 +194,7 @@ def _conservation_residual(c, gT, tracer):
     return a.sum() - b.sum(), np.abs(a).sum() + np.abs(b).sum()
 
 
-@pytest.mark.parametrize("run", [oracle.SMOKE, oracle.FORCED])
+@pytest.mark.parametrize("run", [oracle.FULL, oracle.SMOKE, oracle.FORCED])
 def test_global_conservation(run):
     """Flux form: the global volume integral of the tendency equals sum(T * div_h U) (the non-divergence correction
     of the multi-dim scheme), i.e. face fluxes match across every tile and facet edge. Residual / (sum|a|+sum|b|)

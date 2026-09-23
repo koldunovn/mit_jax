@@ -11,6 +11,12 @@ salt_plume_frac.F:84-221) on the FORCED fields at sampled plume columns, bitwise
 sum_k term(k)*rA*drF(k)*hFacC(k) = saltPlumeFlux*mass2rUnit*rA (the whole plume flux is redistributed).
 Negative controls: SaltPlumeCriterion * (1 + 1e-6) fails the depth gate; recip_drF(k+1) in place of recip_drF(k)
 in the tendency fails conservation.
+
+Full V4r4 tree (oracle.FULL, iterations 1-3; M2.6a): the same depth gate, and the tendency transcription and
+conservation checks on its fields. There saltPlumeFlux is not read from a file: c66g DO_OCEANIC_PHYS zeroes it
+(do_oceanic_phys.F:286-298, ALLOW_AUTODIFF, no READIN_SALT_PLUME_FLUX) and SEAICE_GROWTH sets it (brine rejection,
+I04_growth); from P01 on it is the same pass-through. Bitwise (measured 2026-09-23); negative control: the
+criterion plant also fails on the full tree.
 """
 
 import functools
@@ -26,7 +32,9 @@ from mitgcm_jax.params_io import RunNamelists
 from mitgcm_jax.pkgs import salt_plume as spm
 from mitgcm_jax.tests import oracle
 
-CASES = [(oracle.SMOKE, 1), (oracle.SMOKE, 2), (oracle.FORCED, 1), (oracle.FORCED, 2), (oracle.FORCED, 3)]
+FF_CASES = [(oracle.SMOKE, 1), (oracle.SMOKE, 2), (oracle.FORCED, 1), (oracle.FORCED, 2), (oracle.FORCED, 3)]
+FULL_CASES = [(oracle.FULL, 1), (oracle.FULL, 2), (oracle.FULL, 3)]
+CASES = FF_CASES + FULL_CASES
 # rel. to max |saltPlumeDepth|. Achieved 0 (bitwise) for both oracles, all iterations, FMA contraction off; with FMA
 # (default AVX2) up to 9.4e-13 (the EOS inside the depth search differs by a few ulp).
 TOL_DEPTH = 0.0
@@ -84,10 +92,11 @@ def test_p03_depth_replay_gate(name, it):
     e = relerr(depth(sp, eos, g, d), d["saltPlumeDepth"])
     print(name, it, "saltPlumeDepth rel err", e)
     assert e <= TOL_DEPTH, e
-    # zeroed at the top of DO_OCEANIC_PHYS (do_oceanic_phys.F(ff):292), flux untouched (READIN_SALT_PLUME_FLUX)
+    # zeroed at the top of DO_OCEANIC_PHYS (do_oceanic_phys.F(ff):292 / c66g :292), flux untouched from P01 on
+    # (ff: READIN_SALT_PLUME_FLUX; full: set by SEAICE_GROWTH before P01)
     assert np.all(d["saltPlumeDepth_P01"] == 0.0)
     np.testing.assert_array_equal(d["saltPlumeFlux"], d["saltPlumeFlux_P01"])
-    if name == oracle.FORCED:
+    if name != oracle.SMOKE:
         assert np.abs(d["saltPlumeFlux"]).max() > 0
     else:
         assert np.all(d["saltPlumeFlux"] == 0.0)
@@ -98,12 +107,12 @@ def test_p03_depth_replay_gate(name, it):
 
 def test_klowc_from_masks():
     """kLowC from the initial hFacC equals the deepest level with maskC = 1 (both from ini_masks_etc.F)."""
-    g, _, _, _ = case(*CASES[-1])
+    g, _, _, _ = case(*FF_CASES[-1])
     np.testing.assert_array_equal(np.asarray(spm.klowc(g.h0FacC)), np.asarray(spm.klowc(g.maskC)))
 
 
 def test_negative_control_criterion():
-    g, eos, sp, d = case(*CASES[-1])
+    g, eos, sp, d = case(*FF_CASES[-1])
     bad = spm.SaltPlumeParams(**{**sp.__dict__, "SaltPlumeCriterion": sp.SaltPlumeCriterion * (1 + 1e-6)})
     assert relerr(depth(bad, eos, g, d), d["saltPlumeDepth"]) > 1e-12  # well above rounding
 
@@ -134,9 +143,10 @@ def _frac_scalar(Npower, fact, spdepth, plumek):
     return 1.0
 
 
-def test_tendency_matches_fortran_transcription():
+@pytest.mark.parametrize("name", [oracle.FORCED, oracle.FULL])
+def test_tendency_matches_fortran_transcription(name):
     require_exact_fp()
-    g, _, sp, d = case(oracle.FORCED, 1)
+    g, _, sp, d = case(name, 1)
     L = g.layout
     spd, flux = d["saltPlumeDepth"], d["saltPlumeFlux"]
     got = np.asarray(jax.jit(tendency_all_levels)(sp, g, spd, flux, d["recip_hFacC"]))
@@ -144,7 +154,7 @@ def test_tendency_matches_fortran_transcription():
     cols = np.argwhere((flux != 0) & (spd > 0))
     assert len(cols) > 100
     rng = np.random.default_rng(0)
-    for t, j, i in cols[rng.choice(len(cols), 200, replace=False)]:
+    for t, j, i in cols[rng.choice(len(cols), min(200, len(cols)), replace=False)]:
         for k in range(1, L.Nr + 1):
             gS = 0.0
             if spd[t, j, i] > abs(rF[k - 1]):                       # salt_plume_tendency_apply_s.F:124
@@ -175,8 +185,9 @@ def _conservation_err(g, sp, d, tend):
     return float(np.max(np.abs(col - src)[plume] / np.abs(src[plume]))), int(plume.sum()), n_partial
 
 
-def test_tendency_conserves_plume_flux():
-    g, _, sp, d = case(oracle.FORCED, 1)
+@pytest.mark.parametrize("name", [oracle.FORCED, oracle.FULL])
+def test_tendency_conserves_plume_flux(name):
+    g, _, sp, d = case(name, 1)
     tend = jax.jit(tendency_all_levels)(sp, g, d["saltPlumeDepth"], d["saltPlumeFlux"], d["recip_hFacC"])
     err, n, n_partial = _conservation_err(g, sp, d, tend)
     print("conservation: plume columns", n, "of which plume below the deepest wet cell", n_partial, "max rel err", err)
@@ -244,3 +255,11 @@ def test_gradients_finite_and_fd():
     err = np.min(np.abs(np.array(fds) - ad[None]), axis=0)[use] / np.abs(ad[use])
     print("SPD d/dsalt(k=1): AD", ad[use], "plateau rel err", err)
     assert err.max() < 1e-5, err
+
+
+def test_full_negative_control_criterion():
+    """The criterion plant (SaltPlumeCriterion * (1 + 1e-6)) also fails the full-tree depth gate."""
+    g, eos, sp, d = case(*FULL_CASES[0])
+    assert relerr(depth(sp, eos, g, d), d["saltPlumeDepth"]) == 0.0
+    bad = spm.SaltPlumeParams(**{**sp.__dict__, "SaltPlumeCriterion": sp.SaltPlumeCriterion * (1 + 1e-6)})
+    assert relerr(depth(bad, eos, g, d), d["saltPlumeDepth"]) > 1e-12

@@ -7,6 +7,10 @@ S01/S06 hFacC/W/S + recip_hFacC, S07 aW2d aS2d aC2d pW pS pC, S09 uVel vVel, S10
 rStarFacC/W/S, G00(it+1) rStarFacNm1*, rStarExp*, rStarDh*Dt, pStarFacK, etaHnm1, S12 uVel vVel wVel, and the whole
 chain S05 -> S12 (cg2d included, same iteration counts as the Fortran STDOUT). With the parameters as compile-time
 constants XLA rewrites `x/deltaTFreeSurf` (rStarDh*Dt: 1e-16 relative) — see params_io.params_pytree.
+Full V4r4 tree (oracle.FULL, iterations 1-3; M2.6a): the same gates (EmPmR with the sea-ice fresh-water flux; the
+r*/free-surface code takes the same branches: the sea-ice load enters only phi0surf). Bitwise (measured 2026-09-23);
+negative control on the full tree: the EmPmR term dropped (facEmP = 0) fails dEtaHdt, rStarFacNm1C * (1 + 1e-6)
+fails hFacC.
 """
 
 import dataclasses
@@ -27,7 +31,7 @@ from mitgcm_jax.tests import oracle
 
 L = Layout()
 EX = default_exchanger()
-ORACLES = (oracle.SMOKE, oracle.FORCED)
+ORACLES = (oracle.SMOKE, oracle.FORCED, oracle.FULL)
 # the geometry these kernels read (grid_from_dump minus the 3-D mixing fields they never use)
 GRID_FIELDS = ("dxG", "dyG", "recip_dxC", "recip_dyC", "rA", "recip_rA", "recip_rAw", "recip_rAs", "R_low", "rLowW",
                "rLowS", "Ro_surf", "rSurfW", "rSurfS", "recip_Rcol", "maskInC", "maskC", "maskW", "maskS",
@@ -64,7 +68,8 @@ def cases():
         cp = cg.Cg2dParams.from_namelists(nml, cg.ini_cg2d_norm(g, g.h0FacW, g.h0FacS, p.implicSurfPress,
                                                                    p.implicDiv2DFlow))
         out += [Case(name, it, ds, g, p, cp, its) for it in its]
-    assert [c.name for c in out].count(oracle.FORCED) == 3 and len(out) == 5
+    assert [c.name for c in out].count(oracle.FORCED) == 3 and [c.name for c in out].count(oracle.FULL) == 3
+    assert len(out) == 8
     return out
 
 
@@ -232,6 +237,19 @@ def test_negative_controls(cases):
     assert _fails(lambda: _eq(_cont(c, pe)["dEtaHdt"], c.f("S10_integr_continuity", "dEtaHdt"), "planted"))
     shifted = np.roll(c.f("S10_integr_continuity", "etaH"), 1, axis=-1)
     assert _fails(lambda: _eq(_rstar(c, etaH=shifted)["rStarFacC"], c.f("S11_calc_rstar", "rStarFacC"), "planted"))
+
+
+def test_full_negative_controls(cases):
+    """Full tree: facEmP = 0 (EmPmR term dropped, incl. the sea-ice fresh-water flux) fails dEtaHdt at S10;
+    rStarFacNm1C * (1 + 1e-6) fails hFacC at S01."""
+    c = next(x for x in cases if x.name == oracle.FULL)
+    _eq(_cont(c)["dEtaHdt"], c.f("S10_integr_continuity", "dEtaHdt"), "full dEtaHdt")
+    pe = dataclasses.replace(c.p, facEmP=0.0)
+    assert _fails(lambda: _eq(_cont(c, pe)["dEtaHdt"], c.f("S10_integr_continuity", "dEtaHdt"), "planted"))
+    G = lambda n: c.f("G00_geometry", n)  # noqa: E731
+    bad = J_UPDATE_R_STAR(c.g, G("rStarFacNm1C") * (1 + 1e-6), G("rStarFacNm1W"), G("rStarFacNm1S"),
+                          c.f("S00_begin", "recip_hFacC"), G("recip_hFacW"), G("recip_hFacS"))
+    assert _fails(lambda: _eq(bad[0], c.f("S01_update_rstar_F", "hFacC"), "planted"))
 
 
 def test_volume_conservation(cases):

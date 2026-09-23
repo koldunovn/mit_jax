@@ -10,6 +10,13 @@ useCTRL=T (plan Task 8b): the mixing fields kapGM, kapRedi, diffKr of a grid bui
 adjustments of ff CTRL_MAP_INI_GENARR (xx_kapgm, xx_kapredi, xx_diffkr; pkgs/ctrl.py), which the Fortran applies in
 INITIALISE_VARIA after INI_MIXING; a grid passed in is taken as it is (a dumped G00 grid already holds them) unless
 ctrl_mixing=True. The state controls (etaN, theta, salt, uVel, vVel) are applied by init.state_from_pickup.
+
+Full V4r4 tree (plan M2.6a; recognised by the absence of READIN_SALT_PLUME_FLUX, core/external_forcing.
+readin_salt_plume_flux): the ocean parameters come from the same readers (the full-tree branches are inside them:
+CALC_OCE_MXLAYER method 1, the sea-ice-aware DO_OCEANIC_PHYS forcing halves, temp_EvPrRn unset); the grid gets the
+static sea-ice fields of SEAICE_INIT_VARIA (HEFFM, k1AtC, k1AtZ, k2AtC, k2AtZ; pkgs/seaice_init.seaice_geometry).
+HOOK (M2.6b): P.exf is None for the full tree -- its bulk-formula EXF (pkgs/exf_full.ExfFullParams) and the sea-ice
+parameters (pkgs/seaice_*) are not part of ModelParams yet, and forward_step refuses P.exf = None.
 """
 
 from pathlib import Path
@@ -38,6 +45,7 @@ from mitgcm_jax.pkgs import ggl90 as ggl_mod
 from mitgcm_jax.pkgs import gmredi as gm_mod
 from mitgcm_jax.pkgs import mom_vecinv as mv_mod
 from mitgcm_jax.pkgs import salt_plume as sp_mod
+from mitgcm_jax.pkgs import seaice_init as si_mod
 
 GRID_DIR = Path("/work/ab0995/a270088/MIT/data/eccov4r4/native_grid_files")
 
@@ -82,11 +90,15 @@ def setup(rundir, grid=None, grid_dir=GRID_DIR, layout=None, ctrl_mixing=None):
     g = grid.replace(**_extra_grid_fields(nml, grid, ex, rundir))
     if ctrl_mixing and nml.get("data.pkg", "packages", "useCTRL", default=False):
         g = _ctrl_mixing(nml, g, ex)                     # initialise_varia.F:219 PACKAGES_INIT_VARIABLES -> CTRL
+    full_tree = not ef.readin_salt_plume_flux(nml)
+    if nml.get("data.pkg", "packages", "useSEAICE", default=False):
+        g = g.replace(**si_mod.seaice_geometry(g))       # seaice_init_varia.F:63-146 (static sea-ice fields)
     kLowC = np.asarray(kLowC_from_hFac(np.asarray(g.h0FacC)))
     fsp = fs.FreeSurfParams.from_namelists(nml)
     norm = ini_cg2d_norm(g, g.h0FacW, g.h0FacS, fsp.implicSurfPress, fsp.implicDiv2DFlow)
     P = ModelParams(
-        exf=exf_mod.ExfParams.from_namelists(nml),
+        # HOOK M2.6b: the full tree's EXF (pkgs/exf_full.ExfFullParams) is not wired into ModelParams yet
+        exf=None if full_tree else exf_mod.ExfParams.from_namelists(nml),
         sf=ef.SurfForcingParams.from_namelists(nml),
         rs=rs_mod.RhoSigmaParams.from_namelists(nml, g),
         sp=sp_mod.SaltPlumeParams.from_namelists(nml),

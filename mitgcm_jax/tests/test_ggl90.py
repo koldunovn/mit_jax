@@ -14,6 +14,10 @@ SMOKE it 1, 2 and FORCED it 1, 2, 3. For reference, with XLA's defaults (FMA con
 gate gave GGL90TKE <= 1.3e-15, GGL90viscArU 1.4e-16, GGL90viscArV 1.6e-16, GGL90diffKr 2.6e-16: algsimp
 rewrites SQRTTWO*SQRTTKE/SQRT(N2) (ggl90_calc.F:223) as a multiply by RSQRT (1-ulp mixing lengths, ~28000
 coefficient points), FMA contraction does the rest (TKE solve, Prandtl number).
+Full V4r4 tree (oracle.FULL, iterations 1-3; M2.6a): the same replay; surfaceForcingU/V (P01) there include the
+sea-ice ocean stress of SEAICE_MODEL, which runs before EXTERNAL_FORCING_SURF; GGL90_CALC itself takes no other
+branch (gcov: only its diagnostics fills differ). Bitwise on all four fields (measured 2026-09-23); negative control:
+the m2 plant fails on the full tree too.
 """
 
 import dataclasses
@@ -33,7 +37,8 @@ from mitgcm_jax.tests import oracle
 
 L = Layout()
 OUT = ("GGL90TKE", "GGL90viscArU", "GGL90viscArV", "GGL90diffKr")
-CASES = [(oracle.SMOKE, 1), (oracle.SMOKE, 2), (oracle.FORCED, 1), (oracle.FORCED, 2), (oracle.FORCED, 3)]
+CASES = [(oracle.SMOKE, 1), (oracle.SMOKE, 2), (oracle.FORCED, 1), (oracle.FORCED, 2), (oracle.FORCED, 3),
+         (oracle.FULL, 1), (oracle.FULL, 2), (oracle.FULL, 3)]
 GATE_TOL = 0.0  # bitwise: measured 0 on every field and iteration (needs conftest XLA_FLAGS)
 NEG_MIN = 1e-12  # a planted 1e-6 relative error moves its field by more than this (measured >= 6.4e-11)
 
@@ -239,3 +244,13 @@ def test_gradient_finite_and_matches_fd():
             print(key, pt, "grad", gr[pt], "fd", fds, "best rel", f"{best:.1e}")
             assert gr[pt] != 0.0, (key, pt)
             assert best <= 1e-5, (key, pt, gr[pt], fds)
+
+
+def test_full_negative_control():
+    """Full tree: the gate passes and the GGL90m2 plant (surface TKE from the ice-modified wind stress) fails it."""
+    name, it = oracle.FULL, 1
+    g, inp, ref = case(name, it)
+    p = params(name)
+    assert max(rel_errors(run(p, g, inp), ref).values()) <= GATE_TOL
+    err = rel_errors(run(dataclasses.replace(p, GGL90m2=p.GGL90m2 * (1 + 1e-6)), g, inp), ref)
+    assert err["GGL90TKE"] > NEG_MIN, err

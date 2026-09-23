@@ -86,7 +86,7 @@ def do_oceanic_phys(P, g, ex, f, kLowC, adj=EXACT):
     out.update(ff)
     out.update(sfo)                        # surfaceForcingU/V/T/S, PmEpR, phi0surf
     # tile loop (:616-1110): zeroing, FIND_RHO_2D, GRAD_SIGMA, CALC_IVDC, CALC_OCE_MXLAYER (:640-945)
-    r = rs_mod.rho_sigma_ivdc_mxlayer(P.rs, g, f["theta"], f["salt"], f["hMixLayer"])
+    r = rs_mod.rho_sigma_ivdc_mxlayer(P.rs, g, f["theta"], f["salt"], f["hMixLayer"], kLowC)
     out.update(rhoInSitu=r["rhoInSitu"], IVDConvCount=r["IVDConvCount"], hMixLayer=r["hMixLayer"])
     # ADJOINT SEAM gm_sigma="stable": :900-907 ZERO_ADJ_LOC(sigmaX/Y/R) (GMREDI_WITH_STABLE_ADJOINT) cuts the adjoint
     # of the density gradients for every reader (GGL90_CALC, GMREDI_CALC_TENSOR; CALC_IVDC's flag and
@@ -136,6 +136,9 @@ def mom_vecinv_adj(P, g, adj, uVel, vVel, wVel, hFacC, hFacW, hFacS, recip_hFacC
 def forward_step(P, g, ex, kLowC, st: State, exf_in, adj=EXACT):
     """One FORWARD_STEP. adj: static AdjointConfig (backward-mode semantics; forward values identical in every
     mode)."""
+    if P.exf is None or P.sf.useSEAICE:
+        raise NotImplementedError("full V4r4 tree (EXF bulk formulae, SEAICE_MODEL): the full-tree FORWARD_STEP is "
+                                  "plan M2.6b; this is the flux-forced step")
     f = dict(st.f)
     aux = {}
     myIter = st.it

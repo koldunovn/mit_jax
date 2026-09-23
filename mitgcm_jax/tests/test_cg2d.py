@@ -7,6 +7,10 @@ S08 etaN bitwise; iteration counts SMOKE 179, 172 / FORCED 164, 161, 158 as in S
 stop 9.29e-8, 9.90e-8 / 9.22e-8, 9.92e-8, 9.88e-8, margins 7 %, 1 %, 8 %, 0.8 %, 1.2 %). With the XLA tree sum inside
 each tile (sum_order="tile") the iteration counts are the same and cg2d_x differs by up to 4e-9 relative (CG amplifies
 the 1-ulp differences of the sums).
+Full V4r4 tree (oracle.FULL, iterations 1-3; M2.6a): the same gates; EmPmR (S04) there includes the sea-ice fresh-water
+flux of SEAICE_GROWTH; the solver and SOLVE_FOR_PRESSURE take the same branches. Bitwise, iteration counts 165, 162,
+158 as in its STDOUT (residual at stop 9.41e-8, 9.96e-8, 9.72e-8: margins 6 %, 0.4 %, 3 %). Negative control on the
+full tree: cg2dNorm * (1 + 1e-6) fails C02 and the EmPmR term dropped fails cg2d_b.
 """
 
 import dataclasses
@@ -27,7 +31,7 @@ from mitgcm_jax.tests import oracle
 
 L = Layout()
 EX = default_exchanger()
-ORACLES = (oracle.SMOKE, oracle.FORCED)
+ORACLES = (oracle.SMOKE, oracle.FORCED, oracle.FULL)
 # the geometry these kernels read (grid_from_dump minus the 3-D mixing fields they never use)
 GRID_FIELDS = ("dxG", "dyG", "recip_dxC", "recip_dyC", "rA", "recip_rA", "recip_rAw", "recip_rAs", "R_low", "rLowW",
                "rLowS", "Ro_surf", "rSurfW", "rSurfS", "recip_Rcol", "maskInC", "maskC", "maskW", "maskS",
@@ -183,6 +187,19 @@ def test_negative_controls(cases):
     # the stopping rule: a target just below the residual the Fortran stopped at needs one more iteration
     x, d = J_SOLVE(dataclasses.replace(c.cp, cg2dTolerance=0.99 * c.log["last"]), c.ops(), b0, x0)
     assert int(d["numIters"]) == c.log["n"] + 1
+
+
+def test_full_negative_controls(cases):
+    """Full tree (iteration 2, the tightest stopping margin): cg2dNorm * (1 + 1e-6) fails C02; dropping the fresh-water
+    term (useRealFreshWaterFlux=F: EmPmR incl. the sea-ice melt/freeze flux) fails cg2d_b."""
+    c = next(x for x in cases if x.name == oracle.FULL and x.it == 2)
+    b0, x0, ref = c.f("C01_cg2d_inputs", "cg2d_b"), c.f("C01_cg2d_inputs", "cg2d_x"), c.f("C02_cg2d_solution", "cg2d_x")
+    x, d = J_SOLVE(c.cp, c.ops(), b0, x0)
+    _eq(x, ref, "full C02")
+    x, _ = J_SOLVE(dataclasses.replace(c.cp, cg2dNorm=c.cp.cg2dNorm * (1 + 1e-6)), c.ops(), b0, x0)
+    assert _fails(lambda: _eq(x, ref, "planted"))
+    b, _ = _rhs(c, dataclasses.replace(c.p, useRealFreshWaterFlux=False))
+    assert _fails(lambda: _eq(b, b0, "planted"))
 
 
 def _matvec(cp, ops):

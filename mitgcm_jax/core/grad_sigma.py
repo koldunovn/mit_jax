@@ -7,8 +7,14 @@
     eesupp/src/fill_cs_corner_tr_rl.F            FILL_CS_CORNER_TR_RL (called by GRAD_SIGMA, exch2 corners)
 
 V4r4 switches (data, data.pkg, data.gmredi): calcGMRedi = useGMRedi = T, calcConvect = (ivdc_kappa=10 /= 0) = T,
-useGGL90 = useSALT_PLUME = T, useDiagnostics = F (doDiagsRho = 0), no DOWN_SLOPE / BBL / OFFLINE. The k-loop condition
-(do_oceanic_phys.F:857-860) therefore holds at every k, so FIND_RHO_2D @ p(k) and GRAD_SIGMA run at every level.
+useGGL90 = useSALT_PLUME = T, no DOWN_SLOPE / BBL / OFFLINE. The k-loop condition (do_oceanic_phys.F:857-860)
+therefore holds at every k, so FIND_RHO_2D @ p(k) and GRAD_SIGMA run at every level.
+doDiagsRho (c66g do_oceanic_phys.F:237-248, the same lines in both trees): flux-forced useDiagnostics = F -> 0; full
+V4r4 (data.diagnostics requests MXLDEPTH and DRHODR, not WdRHO_P / WdRHOdP) -> 3 (gcov ref_full_serial13_gcov_1day).
+It adds nothing to the k-loop condition (already true), DIAGS_RHO_L (:917-923, doDiagsRho >= 4) and the DRHODR fill
+(:966-970) are diagnostics output only, and CALC_OCE_MXLAYER is called anyway (calcGMRedi, :935). What the full tree
+changes is inside CALC_OCE_MXLAYER: MXLDEPTH switches calcMixLayerDepth on -> method 1 with FIND_ALPHA
+(core/mxlayer.py).
 
 The k loop has no recurrence (each level reads only rhoInSitu(k) and FIND_RHO_2D(theta(k-1), salt(k-1), kRef=k)),
 so it is vectorised over k. The only state carried between iterations is rhoKm1, which at k = 1 still holds the k = 2
@@ -162,8 +168,9 @@ class RhoSigmaParams:
         for k in ("useDOWN_SLOPE", "useBBL", "useOffLine"):
             if pkg[k]:
                 raise NotImplementedError(f"{k}=T: DWNSLP_CALC_RHO / BBL_CALC_RHO / offline paths are not ported")
-        if pkg["useDiagnostics"]:
-            raise NotImplementedError("useDiagnostics=T: doDiagsRho paths (DIAGS_RHO_L, MXLDEPTH) are not ported")
+        # c66g do_oceanic_phys.F:237-248 doDiagsRho (useDiagnostics): diagnostics output only (DIAGS_RHO_L :917-923,
+        # DRHODR fill :966-970); the k-loop and CALC_OCE_MXLAYER conditions below hold without it. MXLDEPTH enters
+        # through CALC_OCE_MXLAYER's own DIAGNOSTICS_IS_ON (MxLayerParams).
         # set_defaults.F:216 ivdc_kappa = 0.; do_oceanic_phys.F:253 calcConvect = ivdc_kappa.NE.0.
         calcConvect = float(nml.get("data", "parm01", "ivdc_kappa", default=0.0)) != 0.0
         calcGMRedi = pkg["useGMRedi"]  # do_oceanic_phys.F:251 (no ALLOW_OFFLINE)
@@ -182,10 +189,11 @@ class RhoSigmaParams:
 jax.tree_util.register_dataclass(RhoSigmaParams, data_fields=["eos", "mxl"], meta_fields=["calcConvect"])
 
 
-def rho_sigma_ivdc_mxlayer(p, g, theta, salt, hMixLayer):
-    """do_oceanic_phys.F(ff):640-945 for all tiles: inputs theta, salt [T, Nr, ny, nx] (state at the start of the
-    step, halos included) and hMixLayer [T, ny, nx] (its value before the call). Returns a dict with rhoInSitu,
-    sigmaX, sigmaY, sigmaR, IVDConvCount ([T, Nr, ny, nx]) and hMixLayer."""
+def rho_sigma_ivdc_mxlayer(p, g, theta, salt, hMixLayer, kLowC=None):
+    """do_oceanic_phys.F(ff):640-945 (c66g :634-939) for all tiles: inputs theta, salt [T, Nr, ny, nx] (state at the
+    start of the step, halos included), hMixLayer [T, ny, nx] (its value before the call) and kLowC [T, ny, nx] (the
+    static klowC of ini_masks_etc.F, needed only when CALC_OCE_MXLAYER computes the depth: full tree). Returns a dict
+    with rhoInSitu, sigmaX, sigmaY, sigmaR, IVDConvCount ([T, Nr, ny, nx]) and hMixLayer."""
     L = g.layout
     Nr = L.Nr
     # do_oceanic_phys.F:797-805  rhoInSitu(k) = FIND_RHO_2D(theta(k), salt(k), kRef = k), k = 1..Nr, full tile
@@ -198,8 +206,9 @@ def rho_sigma_ivdc_mxlayer(p, g, theta, salt, hMixLayer):
     sigmaX, sigmaY, sigmaR = grad_sigma(g, rhoInSitu, sigKm1, rhoKp1)
     # do_oceanic_phys.F:686-692 IVDConvCount = 0; :912-920 CALC_IVDC for k > 1
     IVDConvCount = calc_ivdc(sigmaR, GRAVITYSIGN)
-    # do_oceanic_phys.F:941-945
-    hMixLayer = calc_oce_mxlayer(p.mxl, hMixLayer)
+    # do_oceanic_phys.F:941-945 (c66g :935-939) CALC_OCE_MXLAYER(rhoInSitu(k=1), sigmaR)
+    hMixLayer = calc_oce_mxlayer(p.mxl, hMixLayer, eos=p.eos, g=g, kLowC=kLowC, theta=theta, salt=salt,
+                                 rhoSurf=rhoInSitu[:, 0])
     return {"rhoInSitu": rhoInSitu, "sigmaX": sigmaX, "sigmaY": sigmaY, "sigmaR": sigmaR,
             "IVDConvCount": IVDConvCount, "hMixLayer": hMixLayer}
 

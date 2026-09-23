@@ -15,9 +15,11 @@ Build facts (ff serial13 jaxdump build, preprocessed find_rho.f):
     call site passes the full range 1-OLx..sNx+OLx, 1-OLy..sNy+OLy (do_oceanic_phys.F(ff):596-599 -> :804-810,
     salt_plume_calc_depth.F:114-118; ALLOW_AUTODIFF zeroes rhoLoc first, find_rho.F:77-85, so nothing is left over).
 
-FIND_ALPHA / FIND_BETA are compiled but the V4r4 forward never calls them: the only caller is CALC_OCE_MXLAYER
-method 1 (calc_oce_mxlayer.F:96), which V4r4 skips (see core/mxlayer.py). FIND_RHO_SCALAR is initialisation-only
-(set_ref_state.F, ini_linear_phisurf.F). Neither is ported.
+FIND_ALPHA (find_alpha.F:115-221, JMD95 branch; `find_alpha`) is called only by CALC_OCE_MXLAYER method 1
+(calc_oce_mxlayer.F:94-97). The flux-forced tree never reaches it (calcMixLayerDepth = F); the full V4r4 tree does,
+because its data.diagnostics requests MXLDEPTH (DIAGNOSTICS_IS_ON, calc_oce_mxlayer.F:73-77; gcov
+ref_full_serial13_gcov_1day: find_alpha 38 %, the JMD95 branch). FIND_BETA and FIND_RHO_SCALAR (initialisation-only:
+set_ref_state.F, ini_linear_phisurf.F) are not ported.
 
 AD: s**1.5 = s*SQRT(s) only where s > 0 (find_rho.F:345-351, 498-504); dry points hold S = 0, so SQRT is taken of a
 guarded argument (jnp.where before the sqrt) to keep the backward pass finite.
@@ -199,6 +201,68 @@ def find_rho_2d(eos, tFld, sFld, kRef):
     """FIND_RHO_2D(iMin..iMax = full tile, kRef, tFld, sFld) for one level: tFld/sFld [T, ny, nx] (or any shape),
     kRef the Fortran pressure-reference level (pressure_for_eos.F:91)."""
     return find_rho(eos, tFld, sFld, pressure_for_eos(eos, kRef))
+
+
+def find_alpha(eos, tFld, sFld, kRef):
+    """FIND_ALPHA, JMD95 branch (find_alpha.F:115-221; equationOfState(1:5) = 'JMD95'), elementwise on the full
+    tile: alphaLoc = d(rho)/d(theta) of level tFld/sFld at the reference pressure of level kRef.
+    Fortran operation order kept: `n.*c*x` = (n*c)*x, `x**2` = x*x (gfortran integer power 2), sums left to right.
+    s3o2 = SQRT(s1*s1*s1) here (find_alpha.F:150), not s1*SQRT(s1) as in FIND_RHOP0; the argument is guarded for AD
+    (S = 0 on dry points)."""
+    Fw, Sw, KFw, KSw, KP = eos.Fw, eos.Sw, eos.KFw, eos.KSw, eos.KP
+    locPres = pressure_for_eos(eos, kRef)                     # find_alpha.F:119-122 PRESSURE_FOR_EOS(kRef)
+    rhoP0 = find_rhop0(eos, tFld, sFld)                       # :124-128 FIND_RHOP0
+    bulkMod = find_bulkmod(eos, locPres, tFld, sFld)          # :130-134 FIND_BULKMOD
+    t1 = tFld                                                 # :140
+    t2 = t1 * t1                                              # :141
+    t3 = t2 * t1                                              # :142
+    pos = sFld > 0.0                                          # :149
+    s_safe = jnp.where(pos, sFld, 1.0)
+    s3o2 = jnp.where(pos, jnp.sqrt(s_safe * s_safe * s_safe), 0.0)   # :150 / :153
+    s1 = jnp.where(pos, sFld, 0.0)                            # :148 / :152
+    p1 = locPres * SItoBar                                    # :156
+    p2 = p1 * p1                                              # :157
+    # :162-166 d(rho)/d(theta) of fresh water at p = 0
+    drhoP0dthetaFresh = (Fw[1]
+                         + 2. * Fw[2] * t1
+                         + 3. * Fw[3] * t2
+                         + 4. * Fw[4] * t3
+                         + 5. * Fw[5] * t3 * t1)
+    # :168-178 of salt water at p = 0
+    drhoP0dthetaSalt = (s1 * (Sw[1]
+                              + 2. * Sw[2] * t1
+                              + 3. * Sw[3] * t2
+                              + 4. * Sw[4] * t3)
+                        + s3o2 * (+ Sw[6]
+                                  + 2. * Sw[7] * t1))
+    # :181-185 d(bulk modulus)/d(theta) of fresh water at p = 0
+    dKdthetaFresh = (KFw[1]
+                     + 2. * KFw[2] * t1
+                     + 3. * KFw[3] * t2
+                     + 4. * KFw[4] * t3)
+    # :187-194 of sea water at p = 0
+    dKdthetaSalt = (s1 * (KSw[1]
+                          + 2. * KSw[2] * t1
+                          + 3. * KSw[3] * t2)
+                    + s3o2 * (KSw[5]
+                              + 2. * KSw[6] * t1))
+    # :196-209 of sea water at p
+    dKdthetaPres = (p1 * (KP[1]
+                          + 2. * KP[2] * t1
+                          + 3. * KP[3] * t2)
+                    + p1 * s1 * (KP[5]
+                                 + 2. * KP[6] * t1)
+                    + p2 * (KP[9]
+                            + 2. * KP[10] * t1)
+                    + p2 * s1 * (KP[12]
+                                 + 2. * KP[13] * t1))
+    drhoP0dtheta = drhoP0dthetaFresh + drhoP0dthetaSalt                       # :211-212
+    dKdtheta = dKdthetaFresh + dKdthetaSalt + dKdthetaPres                    # :213-215
+    # :216-220
+    return ((bulkMod * bulkMod * drhoP0dtheta
+             - bulkMod * p1 * drhoP0dtheta
+             - rhoP0 * p1 * dKdtheta)
+            / ((bulkMod - p1) * (bulkMod - p1)))
 
 
 def find_rho_levels(eos, theta, salt, kRef):

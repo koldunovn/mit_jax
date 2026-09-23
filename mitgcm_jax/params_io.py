@@ -37,6 +37,42 @@ class RunNamelists:
         return v if (array or len(v) != 1) else v[0]
 
 
+def diagnostics_is_on(nml, diagName):
+    """DIAGNOSTICS_IS_ON(diagName) (pkg/diagnostics/diagnostics_is_on.F:47-72) as a static set-up flag: .TRUE. when
+    useDiagnostics and diagName is requested in an output list of data.diagnostics (&DIAGNOSTICS_LIST fields(:,n))
+    whose frequency(n) > 0, or in a statistics list (&DIAG_STATIS_PARMS stat_fields(:,n)).
+
+    Time dependence: DIAGNOSTICS_SWITCH_ONOFF (diagnostics_switch_onoff.F:81-117) sets ndiag < 0 between snapshots
+    only for lists with frequency(n) < 0; a diagnostic requested only in such a list is on at some steps and off at
+    others -> NotImplementedError (not a V4r4 case for the diagnostics the model physics asks about). Averaged lists
+    (frequency > 0) stay on (ndiag >= 0) for the whole run."""
+    if not bool(nml.get("data.pkg", "packages", "useDiagnostics", default=False)):   # packages_boot.F: .FALSE.
+        return False
+    name = diagName.strip()
+    lists = nml.file("data.diagnostics").get("diagnostics_list", {})
+    snap_only = False
+    for key, vals in lists.items():
+        if not key.startswith("fields("):
+            continue
+        if name not in [str(v).strip() for v in vals]:
+            continue
+        idx = key[len("fields("):-1].split(",")
+        n = idx[1] if len(idx) == 2 else idx[0]          # fields(m,n) / fields(m1:m2,n)
+        freq = float(lists.get(f"frequency({n})", [0.0])[0])
+        if freq > 0.0:
+            return True
+        if freq < 0.0:
+            snap_only = True
+    stats = nml.file("data.diagnostics").get("diag_statis_parms", {})
+    for key, vals in stats.items():
+        if key.startswith("stat_fields(") and name in [str(v).strip() for v in vals]:
+            return True
+    if snap_only:
+        raise NotImplementedError(f"diagnostic {name!r} is requested only in snapshot lists (frequency < 0): "
+                                  "DIAGNOSTICS_IS_ON changes with time (diagnostics_switch_onoff.F:81-117)")
+    return False
+
+
 def params_pytree(cls):
     """Register a frozen parameter dataclass as a pytree: fields annotated `float` become leaves (traced when the
     dataclass is passed as a jit argument), every other field (int, bool, str, tuple, ...) is static metadata.

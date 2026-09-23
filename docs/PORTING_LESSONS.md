@@ -379,3 +379,17 @@ Production runs may use XLA defaults (ulp-level differences only).
 - The Fortran re-initialises locals only where ALLOW_AUTODIFF_TAMC does: unwritten halo points keep earlier values
   (seaiceMass starts at 1000), so all-point gates need the entry values carried in the state.
 - Cost: ~1.2 s/step on 16 CPU cores (~3.5 ms per sweep); ~16k sequential scan steps per sweep — GPU cost unmeasured.
+
+## M2.6a — ocean kernels and initial state on the full tree (2026-09-23, sub-agent)
+- Every M1 ocean kernel replays bitwise on full_jaxdump_v5 (it 1-3, halos) — only the parameter readers refused the
+  full namelists. The full-tree start-of-step-1 state (grid, ctrl mixing, S00/G00, 6 sea-ice fields with TICES x7,
+  sIceLoad) is bitwise from setup + state_from_pickup (+ pickup_seaice, pkgs/seaice_init.py).
+- A line-level gcov diff of both trees' 1-day coverage runs listed the full-tree ocean branches quickly; apart from
+  diagnostics fills there were four: MXLDEPTH in data.diagnostics switches on CALC_OCE_MXLAYER method 1 + FIND_ALPHA
+  (a diagnostics request changes a dumped state field, hMixLayer); saltPlumeFlux zeroed before SEAICE_MODEL (visible
+  only in halos: growth writes the interior, SEAICE_MODEL does not exchange it); temp_EvPrRn unset; SEAICE_INIT_VARIA.
+- CTRL_MAP_FORCING is value-identical in the full tree (c66g EXF_MAPFIELDS already exchanged the fields): a stage that
+  changes nothing needs its negative control planted in the operation itself (unsigned exchange).
+- Reading dump headers in parallel threads: full-oracle index 110 s -> 3 s (DumpSet).
+- Open for Nikolay: keep the diagnostic-only hMixLayer/FIND_ALPHA in the production step (literal) or skip it
+  (deviation); tree detection via spflxfile in data.exf (stand-in for READIN_SALT_PLUME_FLUX).
