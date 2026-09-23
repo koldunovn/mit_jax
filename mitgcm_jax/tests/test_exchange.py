@@ -58,18 +58,18 @@ def _refill(ex, maps, kind, fields):
 
 
 def test_probe_decodes_consistently(maps):
-    """Every written halo point has a source inside a tile interior; scalar maps never swap or flip."""
+    """Sources lie inside the padded tile arrays; scalar maps never swap components or (except EXCH_SM with signs)
+    flip signs; interior points are never changed."""
+    interior = ~_halo_mask(2).reshape(-1)
     for k, (src, comp, sign) in maps.maps.items():
-        t, rem = np.divmod(src, L.ny * L.nx)
-        j, i = np.divmod(rem, L.nx)
-        w = comp > 0
-        assert np.all((j[w] >= L.OLy) & (j[w] < L.OLy + L.sNy) & (i[w] >= L.OLx) & (i[w] < L.OLx + L.sNx)), k
+        assert src.min() >= 0 and src.max() < L.nTiles * L.ny * L.nx, k
+        assert np.all(comp[interior] == 0), k
         if k in ("T", "Z", "3D"):
-            assert np.all(comp[w] == 1) and np.all(sign == 1), k
+            assert np.all(comp <= 1) and np.all(sign == 1), k
     # every C-point halo point is written except the four open Antarctic facet edges (facets 1, 2 south; 4, 5 east:
-    # 4 x 90 x OL) and 8 facet-corner blocks (OL x OL): 1440 + 128
+    # 4 x 90 x OL = 1440); the facet-corner blocks are filled by exch2's corner pass from neighbour halos
     unw = ~_written(maps, "T") & _halo_mask(2)
-    assert unw.sum() == 4 * 90 * 4 + 8 * 16, unw.sum()
+    assert unw.sum() == 4 * 90 * 4, unw.sum()
 
 
 @pytest.mark.parametrize("stage,name", [("S00_begin", "theta"), ("S00_begin", "salt"), ("S00_begin", "etaN")])

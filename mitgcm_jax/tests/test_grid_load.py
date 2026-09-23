@@ -11,7 +11,9 @@ halos hold the extra i=sNx+1 / j=sNy+1 row of the mitgrid files, so results diff
 CALC_GRID_ANGLES also at interior points of tile 10, i=90 (land next to the open facet-4 edge).
 The gate therefore compares bitwise every point that does NOT depend on such "unwritten" halo points. That set
 (`taint`) is computed exactly by re-running the port with those halo points poisoned (NaN, 0, +/-1e5) and marking
-every output that changes. The full comparison is kept as a strict xfail until the maps include halo sources.
+every output that changes. FIXED 2026-09-23: the probe now codes halo points too (maps from probe_ff_v4_1step), and
+test_gap_fields_bitwise_everywhere compares the affected fields bitwise over the whole array (it XPASSed as a strict
+xfail first, proving the fix); the taint-based tests are kept as the weaker, earlier gate.
 
 Achieved (SMOKE oracle): every field of G2D, G3D, R3D and the vertical rows is BITWISE equal outside the taint set
 (0 differing bits), including the trigonometric ones: angles/u2zonDir/v2zonDir via glibc sin/cos, fCori/fCoriCos
@@ -161,10 +163,9 @@ def test_other_fields_bitwise_everywhere(gd, gf):
     assert not bad, _msg(bad)
 
 
-@pytest.mark.xfail(strict=True, reason="exch2 maps lack halo-sourced copies (probe with zero halos; Task 7)")
 def test_gap_fields_bitwise_everywhere(gd, gf):
-    """Fails today (documented gap). Once the maps carry halo sources this XPASSes: then move GAP_FIELDS into the
-    full comparison and drop the taint exclusion."""
+    """The fields the old (zero-halo) probe could not reproduce are bitwise everywhere since the probe codes halo
+    points too (exchange maps from reference run probe_ff_v4_1step)."""
     bad = _failures(_compare(gf, gd, GAP_FIELDS))
     assert not bad, _msg(bad)
 
