@@ -108,9 +108,10 @@ without checking this.
   reader must accept 6-digit record counts. **Consequence (verified 2026-09-23): the published flux-forced tree cannot
   restart from pickups it wrote itself** — its writer puts `nrecords = [    403 ];` (I6), the c66g reader
   (`pkg/mdsio/mdsio_read_meta.F:306`, `(I5)`) reads `40`, and `READ_MFLDS_SET` stops ("Pb with Nb of records= 40").
-  Runs from the shipped `pickup.0000000001` (written I5) are unaffected. Fix for our ff reference builds (pending
-  approval): compile the full tree's `mdsio_read_meta.F` (I/O only). The full tree restarts bitwise-exactly
-  (`smoke_full_restart_{A_4steps,B_from2}`).
+  Runs from the shipped `pickup.0000000001` (written I5) are unaffected. **DEVIATION (approved by Nikolay
+  2026-09-23), in `reference/build.sh`:** our ff reference builds compile the full tree's `mdsio_read_meta.F` (I/O
+  only). Verified: ff restart is now bitwise exact, and the fixed binary's output is byte-identical to the pre-fix
+  binary's (`scripts/tests/test_reference.py`). The full tree restarts bitwise-exactly too.
 - `CPP_EEOPTIONS.h` is not overridden: c66g defines `GLOBAL_SUM_ORDER_TILES`
   (`eesupp/inc/CPP_EEOPTIONS.h:132`) — global sums are ordered by tile, so 96×(30×30) and 13×(90×90) runs differ
   in summation order (part of the Task 4 spread).

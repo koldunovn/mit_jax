@@ -12,10 +12,15 @@ gfortran 11.2.0 (Spack), OpenMPI 4.1.2, netCDF-Fortran 4.5.3 (netCDF-C 4.8.1), o
 
 | binary (`reference/bin/`) | tree | layout | use |
 |---|---|---|---|
-| `mitgcmuv_ff_serial13_8668b6b46487` | flux-forced | 1 process, 13 tiles of 90×90 | per-substep oracle (Task 5) |
-| `mitgcmuv_ff_mpi96_6e7d5bac461a` | flux-forced | 96 ranks × 30×30 (production) | 1-month / 1-year references |
+| `mitgcmuv_ff_serial13_ae16b9e60261` | flux-forced (+ I6 meta reader) | 1 process, 13 tiles of 90×90 | spread runs, restarts |
+| `mitgcmuv_ff_serial13_jaxdump_325cc5e9d0ef` | same + dump shim | 1 process, 13 tiles | per-substep oracle (Task 5) |
+| `mitgcmuv_ff_serial13_gcov_304441fbebdb` | same, -O0 --coverage | 1 process, 13 tiles | branch coverage |
+| `mitgcmuv_ff_mpi96_233c705dd0fe` | flux-forced (+ I6 meta reader) | 96 ranks × 30×30 (production) | 1-month / 1-year references |
 | `mitgcmuv_full_serial13_f24b2b6eca38` | full V4r4 | 1 process, 13 tiles of 90×90 | per-substep oracle (M2) |
 | `mitgcmuv_full_mpi96_128048fa1823` | full V4r4 | 96 ranks × 30×30 (production) | 11-step PO.DAAC check, 1-month / 1-year |
+
+Flux-forced binaries include the approved I6 `.meta`-reader deviation (docs/OVERRIDES.md); the earlier
+`ff_*_8668b6b46487`/`6e7d5bac461a` builds (without it) cannot restart and are superseded.
 
 Each binary has a `.txt` with provenance, sha256, compiler flags and the compiled package list. Earlier binaries in
 `bin/` from 07:35–07:38 are superseded: the first set was built without NetCDF (`pkg/profiles` silently disabled by

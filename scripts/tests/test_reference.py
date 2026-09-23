@@ -48,3 +48,17 @@ def test_tile_layout_spread_is_small_and_recorded():
     assert set(only) <= SERIAL_ONLY_MISSING
     worst = max(diffs.values())
     assert 0 < worst < 1e-8, worst            # recorded 8e-10 after 2 steps (docs/REFERENCE_RUNS.md)
+
+
+def test_matched_restart_is_bitwise():
+    """Restart from a pickup reproduces the continuous run exactly (both trees; ff needs the approved I6-reader
+    deviation) -- the matched-restart mode of plan Task 5 depends on it."""
+    for tree in ("ff", "full"):
+        a, b = run(f"smoke_{tree}_restart_continuous"), run(f"smoke_{tree}_restart_from2")
+        same = _same_bytes(a, b, 5)
+        assert all(same.values()), (tree, same)
+
+
+def test_ff_reader_fix_changes_no_numbers():
+    """The ff I6-reader deviation is I/O only: same output as the pre-fix binary on the same run."""
+    assert all(_same_bytes(run("smoke_ff_serial13_prefix_fix"), run("smoke_ff_serial13"), 3).values())
