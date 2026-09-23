@@ -71,3 +71,19 @@ One entry per task, written in the same commit as the task. Cite `file:line`; st
 - The published flux-forced tree cannot read its own pickups (I6 writer override, I5 c66g reader: 403 -> 40). The
   audit had flagged the asymmetry as a "reader note"; running a restart turned it into a hard failure. Restart
   itself is bitwise exact on the full tree.
+
+## Task 7 (part) — exch2 exchanges from the Fortran exchange itself (2026-09-23)
+
+- The halo maps are not re-derived from `data.exch2`: the dump shim runs every exch2 exchange routine the model uses
+  (EXCH_XY/3D, EXCH_UV_XY with and without signs, EXCH_Z, A-, B-, D-grid vector exchanges, EXCH_SM_3D) on fields whose
+  interior holds an exact integer code (component, tile, j, i) and zero halos, and dumps the result. Decoding each halo
+  value gives source point, source component and sign — the map IS the Fortran behaviour, including the two-pass corner
+  update of `exch2_3d_rx.template` (first pass without corners, second with). One gather per exchange in JAX.
+- Result for 13 tiles of 90x90: 17,984 of 19,552 C-point halo points are written; the 1,568 untouched points are the
+  four open Antarctic facet edges (4 x 360) plus eight facet-corner blocks (8 x 16). EXCH_3D == EXCH_XY and
+  EXCH_UV_3D == EXCH_UV_XY bitwise (same routines underneath). EXCH_S3D works on halo-1 arrays and was not probed.
+- Gate: zero the halo points a map writes in a dumped field (theta, salt, etaN, uVel/vVel at S00_begin), exchange in
+  JAX, compare with the dump: bitwise equal. Negative controls (all u-map signs flipped; sources shifted by one point)
+  fail. First version kept the u array as "own value" for the v output of a vector exchange — the real-field gate
+  caught it on the first run; the probe-only round trip could not have.
+- The dump reader must be lazy: one dumped iteration of the forced oracle is ~11 GB (41 stages).

@@ -169,12 +169,17 @@
 **Files:**
 - Create: `mitgcm_jax/grid/topology.py`, `mitgcm_jax/parallel/{exchange,global_sum}.py`, `mitgcm_jax/tests/test_exchange.py`
 
-- [ ] halo map from `data.exch2` incl. vector swap/sign/shift; corner fills literal (`exch2`, `fill_cs_corner*`)
+- [x] halo map incl. vector swap/sign/shift and exch2 corner passes — ➕ taken from the Fortran exchange routines themselves (index-coded probe in the dump shim, `scripts/make_exch_maps.py`, `mitgcm_jax/data/exch_maps_13x90x90.npz`); bitwise on dumped halos (`mitgcm_jax/tests/test_exchange.py`). A 30x30 map needs a probe run of a 30x30 dump build; `fill_cs_corner*` is ported inside the advection/momentum kernels
 - [ ] `exchange(field, kind)`: gather on 1 device; coloured `ppermute` rounds in `shard_map(check_vma=True)`; exchange call sites and overlap loop bounds ported literally in later tasks
 - [ ] `global_sum`: mirror `global_sum_tile.F` ordering; bit-identical for any P
 - [ ] write tests: halo values equal Fortran halo dumps; adjoint identity scalar+vector; sharded == 1 device; global_sum identical P=1,2,4; halo-poison probe (NaN outside Fortran exchange points ⇒ output unchanged); HLO op-count budget; guard test forbidding `ragged_all_to_all`
 - [ ] write negative controls: dropped sign, wrong transpose, stale halo — each must fail
 - [ ] run tests — tag `m0`
+
+➕ **2026-09-23 (session 3) execution note:** kernels of Tasks 6, 9–16b are ported in parallel by sub-agents, each
+gated by replay against the dump shim's stages (`docs/KERNEL_GUIDE.md`); oracles `smoke_ff_jaxdump_v3` (no forcing)
+and `forced_ff_jaxdump_v3` (flux forcing, useCTRL=F, no geothermal) with geometry, exchange probe and per-level
+momentum/tracer stages (`reference/jaxdump/SUBSTEPS.md`). Integration (Task 19 step) follows as kernels pass.
 
 ### M1 — Flux-forced ocean on LLC90 (forward + sharded multi-week gradient)
 
