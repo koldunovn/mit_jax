@@ -42,7 +42,8 @@ steps, ~16k sequential scan steps: on a GPU every XLA scan step costs at least o
 The implicit derivative never uses the Pallas kernel: its preconditioner sweep (_precond, transposed by
 jax.linear_transpose) is XLA code, with the Thomas scans fully unrolled off the CPU (_precond_impl). Tangent / gradient
 of one LSOR solve (GMRES 40 x 8 cycles) on a GH200: 2.7 / 3.0 s unrolled, 31 / 31 s with lax.scan; A100-40
-3.3 / 6.6 s unrolled; CPU 22 / 20 s.
+3.3 / 6.6 s unrolled; CPU 22 / 20 s. CPU with the windowed Krylov basis (_gmres_windowed, 16 cores, gate flags): one
+tangent / transpose GMRES solve 5.4 / 6.1 s (17.1 / 17.6 s with the model-layout basis of ef3ea4e, same node).
 
 LSOR sweep (SEAICE_LSR_TRIDIAGU/V, non-zebra, non-vectorised): for u the rows J=1..sNy are visited in order and row J
 uses the NEW row J-1 (Gauss-Seidel by lines), the OLD row J+1 and the halo columns i=0, sNx+1; each row is a Thomas

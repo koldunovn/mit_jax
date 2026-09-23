@@ -542,3 +542,39 @@ Production runs may use XLA defaults (ulp-level differences only).
   gradient of the full tree came out NaN, and variants of the same chunk VJP either were finite (eager or jitted with
   the model closed over) or deadlocked (model as a jit argument: device threads waiting in different collectives, an
   all-reduce and a collective-permute, at the same time). The same driver on 4 GH200 is correct. Open.
+
+## GMRES of the implicit LSR derivative: bitwise CPU speed-up (2026-09-23/24, branch gmres-speed)
+- Result (16 cores of an interactive node, gate flags, same node before/after): one GMRES(40) x 8 solve 17.1 -> 5.4 s
+  (tangent) and 17.6 -> 6.1 s (transpose), basis work alone 14.4 -> 3.4 s; SEAICE_MODEL "full" per step: gradient
+  37 -> 13 s, tangent 43 -> 20 s (it 1-3); compile +5 s per GMRES instance. Every derivative bitwise equal to ef3ea4e.
+- How: the Krylov basis lives window by window (the reduce windows of XLA:CPU below, interior points only); dot
+  products are explicit chains in XLA's own order (no product arrays, vectorised across windows); Arnoldi step j uses
+  basis rows 0..8*(j//8)+7 only (lax.switch over 5 static sizes, one CGS pass per branch run twice by a fori_loop: a
+  switch holding both passes compiled 1.6x longer for 4 % speed; a fori_loop over row blocks was 14 % slower).
+- Gate first: tests/test_seaice_gmres_bitwise*.py compare `_gmres` with a verbatim frozen copy of ef3ea4e bit for bit
+  (+0 and -0 distinguished) on the oracle LSOR systems (it 1-3 x 2 Picard passes): tangent and transpose solves,
+  lsor_solve jvp/vjp, dynsolver grad/jvp, SEAICE_MODEL full/no_dynamics grads and the full tangent. Negative controls:
+  tiles summed in reverse order, 7 cycles; a reverse-tile change planted in `_gmres` itself fails the gate.
+- Profile before designing: jax.profiler.trace + jax.profiler.ProfileData give per-thunk CPU times without
+  tensorboard. The old Arnoldi step materialised [41, T, 98, 98] products, reduced them with a scalar reduce-window,
+  and XLA fused the tile-ordered gsum of h2 into the GEMV fusion (recomputed per output point: 3-6x the first GEMV).
+- XLA:CPU's reduction order is not the obvious one (read the optimized HLO and the LLVM IR, --xla_dump_to): jnp.sum over
+  (98, 98) becomes a reduce-window of 32x32 windows (tree-reduction rewriter, padding 15/15), scalar and sequential in
+  a window; the 4x4 window sums then go through an LLVM loop vectorised with 2 lanes over window rows (lane 0 = rows
+  0, 2 from +0, lane 1 = rows 1, 3 from -0). A plain jnp.sum over a [32, 32] block is vectorised with reassociation
+  (5 of 6 sums differ); a [3, 2, 4, 4] reduction was sequential where [41, 13, 4, 4] was not (LLVM decides per shape).
+  Emulate an order only after testing it on random data with zeros and -0 against the real reduction.
+- Exact zeros are free in a sequential sum that starts from +0 (the accumulator is never -0): halos and zero basis rows
+  can be dropped without changing a bit. jnp.tensordot over the basis axis is a GEMV adding the rows in order.
+- Explicit chains of elementwise adds keep their order in XLA:CPU under the gate flags: write a fixed-order sum as an
+  unrolled chain inside a fori_loop, never as jnp.sum. A dynamic slice feeding many terms is materialised (copy);
+  index each term directly. A static slice of a loop-carried array used by several fusions is copied too.
+- XLA:CPU splits a fusion over threads by its OUTPUT size (outer_dimension_partitions in the optimized HLO: 2 with 4
+  cores, 4 with 16); reductions with small outputs run on one thread, and independent fusions and independent while
+  loops ran one after the other (measured). The windowed dot kernels are single-threaded; the old code's big product
+  fusions profit more from many cores, so the speed-up shrinks with the core count.
+- Under shard_map(check_vma=True) the implicit LSR derivative fails in `_precond` (scan init typed invariant) for the
+  old and new GMRES alike (pre-existing, not fixed here). With a varying init (dev patch) both run at P=4 and are
+  bitwise equal to each other there; vs P=1 the tangent is bitwise, the VJP differs at round-off (7e-15 of max at
+  most) in ~7.5k values per coefficient field. Put zero cotangents on the padding tiles in such checks: replica
+  cotangents leak into real tiles through the exchange transpose (O(1) differences, a harness artefact).
