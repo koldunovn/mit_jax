@@ -19,8 +19,10 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
 PACIFIC = (100, 179.9, -20, 35)
-UNITS = {"atemp": "m per K" , "aqh": "m per kg/kg", "tauu": "per N/m^2", "tauv": "per N/m^2",
-         "swdown": "per W/m^2", "lwdown": "per W/m^2", "precip": "per m/s", "heff": "m per m"}
+# J = J_theta [K] + J_ice [m] (fullgrad.py): the unit of J is "K or m" -- written J below
+UNITS = {"atemp": "J per K (per cell)", "aqh": "J per kg/kg (per cell)", "tauu": "J per N/m^2 (per cell)",
+         "tauv": "J per N/m^2 (per cell)", "swdown": "J per W/m^2 (per cell)", "lwdown": "J per W/m^2 (per cell)",
+         "precip": "J per m/s (per cell)", "heff": "J per m (per cell)"}
 
 
 def rows(dirs):
@@ -43,7 +45,15 @@ def lim_of(a, q=99.5):
 def plot_map(nereus, ccrs, data, grid, title, label, fname, region="global", lim=None, sat=1.0):
     lon, lat = grid["xC"].ravel(), grid["yC"].ravel()
     v = data.ravel()
-    lim = (lim_of(v) if lim is None else lim) * sat
+    if lim is None:     # colour scale from the points inside the plotted region
+        if region == "pacific":
+            lo = ((lon - PACIFIC[0]) % 360.0 <= (PACIFIC[1] - PACIFIC[0])) & (lat >= PACIFIC[2]) & (lat <= PACIFIC[3])
+        elif region == "arctic":
+            lo = lat >= 62.0
+        else:
+            lo = np.ones_like(v, bool)
+        lim = lim_of(v[lo])
+    lim = lim * sat
     kw = dict(cmap="RdBu_r", vmin=-lim, vmax=lim, method="nearest", resolution=0.5)
     if region == "global":
         fig, ax, _ = nereus.plot(v, lon, lat, projection="rob", colorbar_label=label, title=title,
@@ -85,7 +95,7 @@ def maps(a, fig_dir):
         t = f"{mode}, {tag}"
         for k in (16, 0):
             d = np.where(wet[:, k], g["theta"][:, k], np.nan)
-            plot_map(nereus, ccrs, d, G, f"dJ/dtheta0, level {k + 1} ({-rC[k]:.0f} m), {t}", "K per K (per cell)",
+            plot_map(nereus, ccrs, d, G, f"dJ/dtheta0, level {k + 1} ({-rC[k]:.0f} m), {t}", "J per K (per cell)",
                      fig_dir / f"dJdtheta0_k{k + 1:02d}_{mode}_{tag}_pacific.png", region="pacific", sat=0.1)
         for c in ("atemp", "tauu", "tauv", "aqh", "swdown", "lwdown", "precip"):
             if c in g:
@@ -99,7 +109,7 @@ def maps(a, fig_dir):
                 d = np.where(wet[:, 0], g[c], np.nan)
                 if c == "heff":   # the identity part dJ/dHEFF0 = w_ice inside the region: show d ln(HEFF0) scaling
                     d = np.where(wet[:, 0], g[c] * grid["HEFF0"], np.nan)
-                    label = "m (dJ / d ln HEFF0, per cell)"
+                    label = "J (dJ / d ln HEFF0, per cell)"
                 else:
                     label = UNITS[c]
                 plot_map(nereus, ccrs, d, G, f"dJ/d{c}{' ln HEFF0' if c == 'heff' else ''}, {t}", label,
@@ -116,7 +126,7 @@ def maps(a, fig_dir):
                          fig_dir / f"dJd{c}_diff_{m1}_minus_{m2}_{tag}_arctic.png", region="arctic",
                          lim=lim_of(d1))
         d = np.where(wet[:, 16], g1["theta"][:, 16] - g2["theta"][:, 16], np.nan)
-        plot_map(nereus, ccrs, d, G, f"dJ/dtheta0 level 17: {m1} - {m2}, {tag}", "K per K (per cell)",
+        plot_map(nereus, ccrs, d, G, f"dJ/dtheta0 level 17: {m1} - {m2}, {tag}", "J per K (per cell)",
                  fig_dir / f"dJdtheta0_k17_diff_{m1}_minus_{m2}_{tag}_pacific.png", region="pacific",
                  lim=lim_of(np.where(wet[:, 16], g1["theta"][:, 16], np.nan)) * 0.1)
 
