@@ -378,6 +378,12 @@ review).** Oracle: ➕ `full_jaxdump_v5` (M2.0 done 2026-09-23: 40 new full-tree
   seaice_diffusion.
 - M2.6 Full-tree coupling: full forward_step/do_oceanic_phys (seaice_model call site, ice loading), find_alpha (where
   executed), full-tree mom_calc_visc (same Gibraltar), pickup_seaice init, ctrl for the full tree.
+- ➕ Sea-ice adjoint (Nikolay, 2026-09-23): **default = what ECCO does** — data.autodiff useSEAICEinAdMode=F: the
+  reverse sweep skips the IF (useSEAICE) blocks (autodiff_inadmode_set_ad.F:37), i.e. SEAICE_MODEL's adjoint is the
+  identity on the variables it overwrites and adds nothing to those it only reads (NOT stop_gradient) — thermodynamics
+  included. **Switch** `ad="ecco" | "no_dynamics" | "full"`: no_dynamics = c66g SEAICEuseDYNAMICSswitchInAd=T
+  (autodiff_inadmode_set_ad.F:49-51; dynamics skipped in reverse, thermodynamics adjoint kept — the FESOM choice);
+  full = exact incl. the LSR implicit derivative. Forward byte-identical in all three. Default ecco (confirmed).
 - M2.7 Runs: 11-step vs PO.DAAC snapshot (Fortran ref already within float32+compiler floor), 1-month, 1-year twin.
 
 ### M3 — Beyond (outline)

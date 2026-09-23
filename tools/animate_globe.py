@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""Render model fields on a rotating globe with nereus and stitch the frames into a movie.
+"""Render model fields on a rotating globe (or a Robinson map) with nereus and stitch the frames into a movie.
 
 Runs in the nereus env (NOT the model env):
     /work/ab0995/a270088/mambaforge/envs/nereus/bin/python tools/animate_globe.py FRAMES_DIR MESH_RUNDIR OUT \
         [--var sst] [--vmin -2 --vmax 30] [--lat0 20] [--spin 360] [--fps 12] [--label "JAX MITgcm"]
+        [--projection robinson --stride 4 --fps 40]     (a year of 6-hourly frames as daily frames in ~9 s)
 
 FRAMES_DIR holds frame_<n>.npz files, each with a compact LLC90 field (1170, 90) under the name --var and scalars
 `iter` and `date` (written by the model driver, mitgcm_jax/diagnostics/frames.py, or by frames_from_fortran below).
 MESH_RUNDIR is a Fortran run directory with the model's grid files (XC, YC, RAC, hFacC ...), read by
 nereus.mitgcm.load_mesh, whose point order is the same compact layout. Land (hFacC == 0 at the surface) is masked.
-The globe turns by --spin degrees of longitude over the whole movie. Writes OUT/png/*.png, OUT.mp4 and OUT.gif.
+The globe turns by --spin degrees of longitude over the whole movie (orthographic); --projection robinson draws a
+static global map on a light background instead. --stride N uses every N-th frame. Writes OUT/png/*.png, OUT.mp4 and
+OUT.gif.
 """
 
 import argparse
@@ -51,6 +54,13 @@ def _render(a, files, idx, png):
         z = np.load(files[i])
         v = np.asarray(z[a.var], dtype=np.float64).ravel()
         v = np.where(land, np.nan, v)
+        if a.projection == "robinson":
+            box = [interp]
+            _render_robinson(a, nr, ccrs, plt, v, lon, lat, z, png / f"{i:05d}.png", box)
+            interp = box[0]
+            if i % 50 == 0:
+                print(f"frame {i + 1}/{n} {z['date']}", flush=True)
+            continue
         proj = ccrs.Orthographic(central_longitude=a.lon0 + a.spin * i / max(n - 1, 1), central_latitude=a.lat0)
         fig = plt.figure(figsize=(7.2, 8.0), dpi=110, facecolor="#0b1020")
         ax = fig.add_axes([0.03, 0.12, 0.94, 0.80], projection=proj)
@@ -72,6 +82,26 @@ def _render(a, files, idx, png):
             print(f"frame {i + 1}/{n} {z['date']}", flush=True)
 
 
+def _render_robinson(a, nr, ccrs, plt, v, lon, lat, z, path, interp_box):
+    """One static global Robinson frame, light background, land grey (interp_box[0]: reused regrid interpolator)."""
+    proj = ccrs.Robinson(central_longitude=a.lon0)
+    fig = plt.figure(figsize=(10.0, 5.9), dpi=120, facecolor="white")
+    ax = fig.add_axes([0.02, 0.15, 0.96, 0.74], projection=proj)
+    ax.set_facecolor("#bdbdbd")                                   # land (masked points) shows the axes background
+    fig, ax, interp_box[0] = nr.plot(v, lon, lat, projection=proj, ax=ax, interpolator=interp_box[0],
+                                     method="nearest", resolution=a.resolution, cmap=a.cmap, vmin=a.vmin,
+                                     vmax=a.vmax, coastlines=True, colorbar=False, land=False)
+    ax.set_global()
+    cax = fig.add_axes([0.25, 0.09, 0.5, 0.03])
+    sm = plt.cm.ScalarMappable(cmap=a.cmap, norm=plt.Normalize(a.vmin, a.vmax))
+    cb = fig.colorbar(sm, cax=cax, orientation="horizontal", extend="both")
+    cb.set_label(f"{a.cbar_label} ({a.units})")
+    fig.text(0.5, 0.945, a.label, ha="center", fontsize=13)
+    fig.text(0.5, 0.905, str(z["date"]), ha="center", fontsize=11, color="#333333")
+    fig.savefig(path, facecolor="white")
+    plt.close(fig)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("frames")
@@ -90,9 +120,11 @@ def main(argv=None):
     ap.add_argument("--units", default="°C")
     ap.add_argument("--cbar-label", default="sea surface temperature")
     ap.add_argument("--jobs", type=int, default=1, help="render frames in N processes")
+    ap.add_argument("--projection", choices=("orthographic", "robinson"), default="orthographic")
+    ap.add_argument("--stride", type=int, default=1, help="use every N-th frame")
     a = ap.parse_args(argv)
 
-    files = sorted(Path(a.frames).glob("frame_*.npz"))
+    files = sorted(Path(a.frames).glob("frame_*.npz"))[::a.stride]
     if not files:
         raise SystemExit(f"no frames in {a.frames}")
     png = Path(a.out) / "png"
