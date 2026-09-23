@@ -75,3 +75,21 @@ def test_ff_stage1_twin_bitwise_and_spread():
     assert set(only) <= SERIAL_ONLY_MISSING
     dyn = {k: v for k, v in diffs.items() if k[1].startswith("dynstat_")}
     assert 0 < max(dyn.values()) < 1e-6, max(dyn.values())
+
+
+def test_full_stage1_twin_and_podaac_snapshot():
+    """Full V4r4 stage 1 (plan Task 4): the 96-rank twin is bitwise; 11 steps from the V4r4 pickup reproduce the
+    PO.DAAC native-grid snapshot of 1992-01-02T00 (float32 product of the ifort production run) within float32 +
+    compiler floor. Recorded 2026-09-23: T max 4.0e-4 degC (rms 3.8e-7), S max 1.9e-4 (rms 1.3e-7), Eta max 7.8e-5 m
+    (rms 3.2e-7); no dry-point values."""
+    import importlib.util
+
+    a, b = run("ref_full_mpi96_1day_a"), run("ref_full_mpi96_1day_b")
+    assert all(_same_bytes(a, b, 25).values())
+    spec = importlib.util.spec_from_file_location("c2p", REPO / "scripts" / "compare_to_podaac.py")
+    c2p = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(c2p)
+    rows = c2p.compare(run("ref_full_mpi96_11steps"), 12)
+    assert set(rows) >= {"T", "S", "Eta"}, rows
+    for name, r in rows.items():
+        assert r["max_abs"] < 1e-3 and r["rms"] < 1e-6 and r["dry_nonzero_model"] == 0, (name, r)

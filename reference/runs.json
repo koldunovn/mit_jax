@@ -15,5 +15,12 @@
   "ref_ff_mpi96_1day_a": "ref_ff_mpi96_1day_a",
   "ref_ff_mpi96_1day_b": "ref_ff_mpi96_1day_b",
   "ref_ff_serial13_1day": "ref_ff_serial13_1day",
-  "ref_ff_jaxdump_v4": "ref_ff_serial13_jaxdump_3steps"
+  "ref_ff_jaxdump_v4": "ref_ff_serial13_jaxdump_3steps",
+  "ref_full_mpi96_11steps": "ref_full_mpi96_11steps",
+  "ref_full_mpi96_1day_a": "ref_full_mpi96_1day_a",
+  "ref_full_mpi96_1day_b": "ref_full_mpi96_1day_b",
+  "ref_full_serial13_1day": "ref_full_serial13_1day",
+  "ref_full_jaxdump_v4": "ref_full_serial13_jaxdump_3steps",
+  "ref_ff_mpi96_1month": "ref_ff_mpi96_1month",
+  "twin_ff_nogeo_serial13_1month": "twin_ff_serial13_nogeo_1month"
 }
