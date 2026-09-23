@@ -73,5 +73,5 @@ def test_ff_stage1_twin_bitwise_and_spread():
     ma, ms = read_monitor(a / "STDOUT.0000"), read_monitor(s / "STDOUT.0000")
     diffs, only = compare_monitors(ma, ms)
     assert set(only) <= SERIAL_ONLY_MISSING
-    dyn = {k: v for k, v in diffs.items() if k.startswith("dynstat_")}
+    dyn = {k: v for k, v in diffs.items() if k[1].startswith("dynstat_")}
     assert 0 < max(dyn.values()) < 1e-6, max(dyn.values())
