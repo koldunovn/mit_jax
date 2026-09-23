@@ -698,9 +698,9 @@ C      9 rVel2wUnit, 10 wUnit2rVel, 11 rhoFacC, 12 rhoFacF, 13 dBdrRef, 14 phiRe
       END
 
 C---------------------------------------------------------------------------------------------------------------------
-C     Exchange probe: fill tile interiors with exact codes, halos with 0, run each exch2 exchange type used by the
-C     model, dump the results with halos. code(u-like) = 1e6 + tile*1e4 + j*100 + i, code(v-like) = 2e6 + ...;
-C     a negative halo value = sign flip, 0 = not filled. Arrays live in a local common (large).
+C     Exchange probe: fill every point (halos included) with an exact code, run each exch2 exchange type used by the
+C     model, dump the results with halos. code(u-like) = 1e6 + tile*1e4 + (j+OLy)*100 + (i+OLx), v-like 2e6 + ...;
+C     a negative value = sign flip; a point holding its own code was not changed. Arrays live in a local common.
       SUBROUTINE JAXDUMP_EXCH_PROBE( stage, myIter, myThid )
       IMPLICIT NONE
 #include "SIZE.h"
@@ -787,14 +787,11 @@ C       EXCH_S3D_RL works on (0:sNx+1,0:sNy+1) arrays (halo 1): not probed here
 #else
         tile = bi + (bj-1)*nSx
 #endif
+C       every point is coded, halos included (a copy from a halo point is visible): padded indices j+OLy, i+OLx
         DO j = 1-OLy, sNy+OLy
          DO i = 1-OLx, sNx+OLx
-          pu(i,j,1,bi,bj) = 0. _d 0
-          pv(i,j,1,bi,bj) = 0. _d 0
-          IF ( i.GE.1 .AND. i.LE.sNx .AND. j.GE.1 .AND. j.LE.sNy ) THEN
-           pu(i,j,1,bi,bj) = 1000000 + tile*10000 + j*100 + i
-           pv(i,j,1,bi,bj) = 2000000 + tile*10000 + j*100 + i
-          ENDIF
+          pu(i,j,1,bi,bj) = 1000000 + tile*10000 + (j+OLy)*100 + (i+OLx)
+          pv(i,j,1,bi,bj) = 2000000 + tile*10000 + (j+OLy)*100 + (i+OLx)
          ENDDO
         ENDDO
        ENDDO
