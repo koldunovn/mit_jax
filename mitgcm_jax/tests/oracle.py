@@ -25,8 +25,11 @@ def dumpset(name):
     return DumpSet(run_dir(name) / "jaxdump")
 
 
-# the oracle the kernel gates use (forced 3-step run once it exists; no-forcing smoke dumps before)
+# Oracles for kernel gates (reference/runs.json names):
+#   SMOKE  2 steps, useEXF=F (no surface forcing), dumps at iterations 1, 2
+#   FORCED 3 steps, useEXF=T (flux-forced 1992 forcing), useCTRL=F, geothermalFile=' ', dumps at iterations 1, 2, 3
 SMOKE = "smoke_ff_jaxdump_v3"
+FORCED = "forced_ff_jaxdump_v3"
 
 
 def field(ds, it, stage, name, layout=None):
