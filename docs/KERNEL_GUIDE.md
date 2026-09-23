@@ -64,7 +64,7 @@ Read `CLAUDE.md` (project rules) first. This file is the working recipe every ke
 
 ## Running
 - Never run LLC90-sized tests on the login node. Run them inside the development allocation:
-  `srun --jobid=$(squeue -u a270088 -n mitjax_dev -h -o %i) --overlap -n1 -c16 --mem=64G \
+  `srun --jobid=$(squeue -u a270088 -n mitjax_dev -t R -h -o %i | head -1) --overlap -n1 -c16 --mem=64G \
      env JAX_PLATFORMS=cpu /work/ab0995/a270088/mambaforge/envs/mitgcm-jax/bin/python -m pytest -q <file>`
   (from `/home/a/a270088/MIT`). The login node may only run `pytest -m smoke` (seconds).
 - Python: `/work/ab0995/a270088/mambaforge/envs/mitgcm-jax/bin/python` (jax 0.10.1, pinned).
