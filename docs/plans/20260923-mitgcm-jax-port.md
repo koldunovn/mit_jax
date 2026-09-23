@@ -148,13 +148,13 @@
 - Create: `mitgcm_jax/io/dump.py`, `tools/diffdump.py`, `mitgcm_jax/tests/test_dump_io.py`
 
 - [x] env-gated (`JAXDUMP_DIR`, `JAXDUMP_STEPS`) per-substep dumps with global (facet,i,j,k) keys **including halo values**; patches for both trees; SUBSTEPS.md final
-- [ ] ⏳ (done: rho/sigma/IVDC/mxlayer, salt-plume depth, GGL90, GM tensor, cg2d rhs/x/operator, IMPLDIFF in/out, residual flow, tracer integrate; remaining stages are added in the kernel task that needs them via the STAGES table) routine-input dumps for replay (grad_sigma/IVDC/mxlayer, GGL90, GM taper/tensor, salt-plume depth, cg2d rhs/operator, implicit vertical solves, mom_calc_visc; later bulk formulae, ice thermo)
-- [ ] matched-restart mode (start from any Fortran pickup, dump there)
-- [ ] ⏳ (GCOV builds + `tools/branch_coverage.py` ready; ff 1-day run queued with the forcing) gcov-instrumented run (1 day, both trees) → `docs/BRANCHES.md`: routines/branches actually executed = port scope
+- [x] ⏳ (done: rho/sigma/IVDC/mxlayer, salt-plume depth, GGL90, GM tensor, cg2d rhs/x/operator, IMPLDIFF in/out, residual flow, tracer integrate; remaining stages are added in the kernel task that needs them via the STAGES table) routine-input dumps for replay (grad_sigma/IVDC/mxlayer, GGL90, GM taper/tensor, salt-plume depth, cg2d rhs/operator, implicit vertical solves, mom_calc_visc; later bulk formulae, ice thermo) — all M1 stages added (41 stages, SUBSTEPS.md); M2 stages come with M2
+- [x] matched-restart mode (start from any Fortran pickup, dump there) — make_rundir --pickup-from/--niter0 (session 2) + JAX restart from state npz
+- [x] ⏳ (GCOV builds + `tools/branch_coverage.py` ready; ff 1-day run queued with the forcing) gcov-instrumented run (1 day, both trees) → `docs/BRANCHES.md`: routines/branches actually executed = port scope — docs/BRANCHES.md (ff 472 / full 568 executed routines; M2 additions: 38 seaice, EXF bulk, zenith angle)
 - [x] dumps off ⇒ output byte-identical to uninstrumented build (also with dumps ON; smoke runs, `scripts/tests/test_reference.py`)
 - [x] `tools/diffdump.py`: first (step, substep, field) above tolerance; wet masking; vector frames; zero-on-both-sides flag
 - [x] write tests: reader round-trip; diffdump negative control (planted difference caught, identical passes, all-zero flagged)
-- [ ] run tests — must pass before Task 6
+- [x] run tests — must pass before Task 6
 
 ### Task 6: Grid and geometry loader
 **Files:**
