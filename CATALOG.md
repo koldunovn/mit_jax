@@ -49,8 +49,8 @@ Never run models or the test suite on the login node. No persistent XLA cache (u
 
 ## 3. The target in numbers (details: `eccov4r4_config.md`)
 
-- MITgcm checkpoint66g + 26 `.F` overrides (only 3 change forward physics: Gibraltar ×10 viscosity,
-  phiHydLow init, uvel/vvel control init). LLC90: 5 facets, 13 tiles of 90×90, 105,300 columns, 50 levels
+- MITgcm checkpoint66g + overrides; only the Gibraltar ×10 viscosity changes forward values (phiHydLow init and
+  uvel/vvel control init turned out forward-neutral; audit in `docs/OVERRIDES.md`, 2026-09-23). LLC90: 5 facets, 13 tiles of 90×90, 105,300 columns, 50 levels
   (~5.3 M cells, ~2.4 M wet). dt = 3600 s, 227,903 steps (1992–2017), 96 ranks × 30×30 tiles.
 - Physics: z* nonlinear free surface (nonlinFreeSurf=4, select_rStar=2), cg2d, JMD95Z EOS, vector-invariant
   momentum, AB3, DST3 (scheme 30) tracers with implicit 3rd-order vertical advection (pentadiagonal), GM/Redi

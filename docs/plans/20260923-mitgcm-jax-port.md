@@ -14,8 +14,13 @@
 
 ## Context (from discovery)
 - **Sources (read-only clones):** `~/MIT/MITgcm_c66g` (tag checkpoint66g); `~/MIT/ECCO-v4-Configurations/ECCOv4 Release 4/`
-  — **two override trees**: `code/` (full V4r4) and `flux-forced/code/` (its own `forward_step.F`,
-  `do_oceanic_phys.F`, `apply_forcing.F`, `impldiff.F`, `mom_vecinv.F`, `mom_vi_hdissip.F`,
+  — **two override trees**: `code/` (full V4r4) and `flux-forced/code/`. **Audited in Task 2 → `docs/OVERRIDES.md`:**
+  the only override changing V4r4 forward values is the Gibraltar ×10 harmonic viscosity (`mom_calc_visc.F`); the
+  flux-forced tree adds the `spflx` → `saltPlumeFlux` read path (`READIN_SALT_PLUME_FLUX`) and drops bulk formulae/sea
+  ice; its `apply_forcing`, `impldiff`, `mom_vecinv`, `mom_vi_hdissip`, `momentum_correction_step` overrides are
+  diagnostics only → port the c66g versions. `ALLOW_AUTODIFF` is defined in every V4r4 build (pkg/autodiff compiled)
+  and changes forward branches (e.g. `forward_step.F:418–450`). Original list:
+  `forward_step.F`, `do_oceanic_phys.F`, `apply_forcing.F`, `impldiff.F`, `mom_vecinv.F`, `mom_vi_hdissip.F`,
   `momentum_correction_step.F`, `exf_getffields.F`, `exf_mapfields.F` (pLoad l.330, saltPlumeFlux=spflx l.346),
   `exf_init_*.F`, `EXF_FIELDS.h`/`EXF_PARAM.h` with `spflx`); `~/MIT/verification_other_c66g`; `~/MIT/ECCOv4`.
 - **Notes:** `/work/ab0995/a270088/MIT/notes/` — `eccov4r4_config.md`, `lessons_{c_kokkos,jax,papers,adjoint,parallel_adjoint}.md`,
@@ -107,11 +112,11 @@
 **Files:**
 - Create: `docs/OVERRIDES.md`
 
-- [ ] diff every `code/*.F,*.h` and `flux-forced/code/*.F,*.h` against c66g and against each other; record forward-physics deltas with `file:line` (flux-forced: pLoad, spflx/saltPlumeFlux, salt-plume path in `do_oceanic_phys.F:294,580`, `impldiff`, `mom_vecinv`, `mom_vi_hdissip`, `momentum_correction_step`, EXF read/map path; full: Gibraltar ×10, phiHydLow init, uvel/vvel control init)
-- [ ] record CPP option differences between the trees (`*_OPTIONS.h`, `SIZE.h`, packages.conf)
-- [ ] write `SUBSTEPS` draft (step order with file:line for both trees)
-- [ ] test: a script re-runs the diff and fails if `docs/OVERRIDES.md` misses a changed file
-- [ ] run test — must pass before Task 3
+- [x] diff every `code/*.F,*.h` and `flux-forced/code/*.F,*.h` against c66g and against each other; record forward-physics deltas with `file:line` (flux-forced: pLoad, spflx/saltPlumeFlux, salt-plume path in `do_oceanic_phys.F:294,580`, `impldiff`, `mom_vecinv`, `mom_vi_hdissip`, `momentum_correction_step`, EXF read/map path; full: Gibraltar ×10, phiHydLow init, uvel/vvel control init)
+- [x] record CPP option differences between the trees (`*_OPTIONS.h`, `SIZE.h`, packages.conf)
+- [x] write `SUBSTEPS` draft (step order with file:line for both trees)
+- [x] test: a script re-runs the diff and fails if `docs/OVERRIDES.md` misses a changed file (`scripts/audit_overrides.py`, `scripts/tests/test_overrides.py`)
+- [x] run test — must pass before Task 3 (tier 1 job 27632039: 13 passed)
 
 ### Task 3: Stage ECCO v4r4 input data + namelist file-reference audit
 **Files:**
@@ -129,7 +134,7 @@
 - Create: `reference/build.sh`, `reference/optfile_levante_gfortran`, `reference/SIZE.h_13x90x90`, `reference/data.exch2_13`, `reference/run.sh`, `reference/jobs/*.sbatch`, `reference/README.md`, `docs/REFERENCE_RUNS.md`
 - Create: `scripts/tests/test_reference.py`
 
-- [ ] gfortran builds (strict FP; document ifort vs gfortran) of both trees: MPI 96×(30×30) and **serial 13×(90×90) = per-substep oracle** (blankList adapted); `GLOBAL_SUM_ORDER_TILES` status recorded
+- [ ] gfortran builds (strict FP; document ifort vs gfortran) of both trees, **with the full `packages.conf` (autodiff/ctrl/ecco compiled: `ALLOW_AUTODIFF` changes forward branches, `docs/OVERRIDES.md`)**: MPI 96×(30×30) and **serial 13×(90×90) = per-substep oracle** (blankList adapted); `GLOBAL_SUM_ORDER_TILES` status recorded
 - [ ] frozen binaries under `/work/.../MIT/reference/bin/` with sha256
 - [ ] runs: full V4r4 11 steps vs PO.DAAC snapshot; flux-forced and full V4r4 1 month + 1 year (96 ranks); same runs on 13-tile serial/other tiling = run-to-run spread yardstick; decide whether ecco/profiles packages can be dropped for the reference (document)
 - [ ] provenance (binary sha, namelists, ranks, wall time) in `docs/REFERENCE_RUNS.md`
@@ -246,7 +251,7 @@ compare outputs), so no task waits for a later package; full-step gates start in
 
 ### Task 14b: Vector-invariant tendency terms and hydrostatic pressure
 **Files:**
-- Create: `mitgcm_jax/pkgs/mom_vecinv.py` (flux-forced `mom_vecinv.F`, `mom_vi_hdissip.F` versions where they differ), `mitgcm_jax/core/phi_hyd.py`, `mitgcm_jax/tests/test_mom_terms.py`
+- Create: `mitgcm_jax/pkgs/mom_vecinv.py` (c66g `mom_vecinv.F`, `mom_vi_hdissip.F`: the flux-forced overrides are diagnostics only, `docs/OVERRIDES.md`), `mitgcm_jax/core/phi_hyd.py`, `mitgcm_jax/tests/test_mom_terms.py`
 
 - [ ] gate first (replay per term): phiHyd incl. r* and pLoad terms, enstrophy Coriolis with Jamart, KE gradient, vertical shear, hdissip (harmonic + biharmonic), bottom drag
 - [ ] corner handling literal; vector exchanges via Task 7
@@ -265,7 +270,7 @@ compare outputs), so no task waits for a later package; full-step gates start in
 **Files:**
 - Create: `mitgcm_jax/core/{free_surface,cg2d,solve_for_pressure}.py`, `mitgcm_jax/tests/{test_cg2d,test_free_surface}.py`
 
-- [ ] gate first: `update_r_star`, `update_cg2d` operator, cg2d rhs/solution/iteration count + residual margin, `momentum_correction_step` (flux-forced version), `integr_continuity`, `calc_r_star`
+- [ ] gate first: `update_r_star`, `update_cg2d` operator, cg2d rhs/solution/iteration count + residual margin, `momentum_correction_step` (c66g; flux-forced override is diagnostics only), `integr_continuity`, `calc_r_star`
 - [ ] cg2d literal (preconditioner, `global_sum` residual, ≤300 iterations), in `lax.custom_linear_solve(symmetric=True)`; forward reproduces Fortran iterate; tight transpose; warm start stop_gradient; ecco mode: stop_gradient on operator coefficients (as `cg2d.flow`)
 - [ ] write tests: replay gates; same iteration count P=1/P=4; d/d(rhs), d/d(coeff) vs FD; volume conservation + negative control
 - [ ] run tests — must pass before Task 16
@@ -281,7 +286,7 @@ compare outputs), so no task waits for a later package; full-step gates start in
 
 ### Task 16b: Tracer integration and implicit vertical terms
 **Files:**
-- Create: `mitgcm_jax/core/thermodynamics.py` (temp/salt integrate, diffusion diffKh=10 + 3-D diffKr + GGL90 + IVDC, flux-forced `impldiff.F`, geothermal, shortwave penetration, `FREESURF_RESCALE_G`, `CYCLE_AB_TRACER`), `mitgcm_jax/core/implicit.py` (pentadiagonal + u3c4 implicit vertical advection), `mitgcm_jax/core/tracers_correction.py`, `mitgcm_jax/tests/test_thermo.py`
+- Create: `mitgcm_jax/core/thermodynamics.py` (temp/salt integrate, diffusion diffKh=10 + 3-D diffKr + GGL90 + IVDC, c66g `impldiff.F` (flux-forced override is diagnostics only), geothermal, shortwave penetration, `FREESURF_RESCALE_G`, `CYCLE_AB_TRACER`), `mitgcm_jax/core/implicit.py` (pentadiagonal + u3c4 implicit vertical advection), `mitgcm_jax/core/tracers_correction.py`, `mitgcm_jax/tests/test_thermo.py`
 
 - [ ] gate first (replay): AB3 on θ/S fields (`temp_integrate.F:192–209`, rescale l.419–446), implicit solve in/out, tracers correction
 - [ ] write tests: replay; penta-diagonal gradient vs FD; tracer budget + negative control

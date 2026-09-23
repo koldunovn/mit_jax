@@ -21,6 +21,7 @@ MANIFEST = {
     "mitgcm_jax/tests/test_env.py": "smoke",
     "mitgcm_jax/tests/test_manifest.py": "smoke",
     "scripts/tests/test_check_pytest_report.py": "smoke",
+    "scripts/tests/test_overrides.py": "tier1",
 }
 
 # Directories searched for test files (must match pyproject testpaths).
