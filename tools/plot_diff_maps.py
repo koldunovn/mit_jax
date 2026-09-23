@@ -8,12 +8,12 @@ Runs in the nereus env (not the model env):
 Signed differences on wet points only (surface hFacC > 0), linear symmetric colour scales (Nikolay 2026-09-23: no
 log scale), float64 restarts (pickup*.ckptA) on both sides. Figures:
   ff_year     flux-forced production run, end of 1992 (it 8761): SST, theta at 300 m, SSS, SSH for JAX - Fortran
-              96 ranks, Fortran 13 tiles - Fortran 96 ranks (the Fortran's own spread between tilings), JAX - Fortran
+              96 ranks, Fortran 13 ranks - Fortran 96 ranks (the Fortran's own spread between tilings), JAX - Fortran
               13 tiles (runs_jax/ff_prod_1992_gpu_v2: one A100). Time evolution: tools/plot_monitor_ts.py.
   full_month  full V4r4 (EXF bulk + sea ice), one month (it 745), float64 restarts: Fortran 96 ranks minus Fortran 13
               tiles: SST, SSH, sea-ice concentration and thickness (Arctic, Antarctic) — the yardstick for the JAX full model
               (the LSR sea-ice solver is tile-local, so the two tilings converge to different iterates). With
-              --jax STATE (a JAX full-model state .npz at it 745) a second row shows JAX minus Fortran 13 tiles.
+              --jax STATE (a JAX full-model state .npz at it 745) a second row shows JAX minus Fortran 13 ranks.
 """
 
 import argparse
@@ -136,7 +136,7 @@ def _row_cbar(fig, plt, axes_row_bottom, vmax, label):
 def fig_ff_year(out):
     """End of 1992 (it 8761), float64 restarts, signed differences on linear symmetric scales (one colour limit per
     row: the 99.9th percentile of |d| over the row's three panels; hotspots saturate). Rows: SST, theta at 300 m,
-    SSS, SSH. Columns: JAX - Fortran 96 ranks, Fortran 13 tiles - Fortran 96 ranks, JAX - Fortran 13 tiles."""
+    SSS, SSH. Columns: JAX - Fortran 96 ranks, Fortran 13 ranks - Fortran 96 ranks, JAX - Fortran 13 ranks."""
     import cartopy.crs as ccrs
     import matplotlib
     matplotlib.use("Agg")
@@ -149,7 +149,7 @@ def fig_ff_year(out):
     # pickup records: Theta 100..149, Salt 150..199 (k = 0..49), EtaN 400; RC(19) = -299.9 m
     rows = [("SST", "theta", 100, 0, "degC"), ("theta at 300 m", "theta", 119, 19, "degC"),
             ("SSS", "salt", 150, 0, "psu"), ("SSH", "etaN", 400, None, "m")]
-    labels = ["JAX (1 A100) - Fortran 96 ranks", "Fortran 13 tiles - Fortran 96 ranks", "JAX (1 A100) - Fortran 13 tiles"]
+    labels = ["JAX (1 A100) - Fortran 96 ranks", "Fortran 13 ranks - Fortran 96 ranks", "JAX (1 A100) - Fortran 13 ranks"]
     nrow, ncol = len(rows), 3
     fig = plt.figure(figsize=(17, 3.35 * nrow + 0.8), dpi=110)
     top, bottom = 0.93, 0.02
@@ -172,7 +172,7 @@ def fig_ff_year(out):
 
 def fig_full_month(out, jax_path=None):
     """Full V4r4 after one month (it 745), float64 restarts, signed differences on linear scales: Fortran 96 ranks -
-    Fortran 13 tiles (and JAX - Fortran 13 tiles with --jax, same colour limits per panel)."""
+    Fortran 13 ranks (and JAX - Fortran 13 ranks with --jax, same colour limits per panel)."""
     import cartopy.crs as ccrs
     import matplotlib
     matplotlib.use("Agg")
@@ -187,9 +187,9 @@ def fig_full_month(out, jax_path=None):
     def fortran_get(run, what):
         return pickup_rec(run, what) if isinstance(what, int) else fortran_pickup(run, what)
 
-    rows = [("Fortran 96 ranks - Fortran 13 tiles", lambda what: fortran_get(f96, what))]
+    rows = [("Fortran 96 ranks - Fortran 13 ranks", lambda what: fortran_get(f96, what))]
     if jax_path:
-        rows.append(("JAX - Fortran 13 tiles", lambda what: _jax64(jax_path, *jv[what])))
+        rows.append(("JAX - Fortran 13 ranks", lambda what: _jax64(jax_path, *jv[what])))
     panels = [("SST", 100, "degC", None, ccrs.Robinson(-150)),
               ("SSH", 400, "m", None, ccrs.Robinson(-150)),
               ("ice concentration, Arctic", "siAREA", "", [-180, 180, 55, 90], ccrs.NorthPolarStereo()),
