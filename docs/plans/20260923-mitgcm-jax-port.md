@@ -367,7 +367,7 @@ compare outputs), so no task waits for a later package; full-step gates start in
   comparison moves to M3, once ctrl/smooth exist.
 
 ➕ **M2 draft task list (2026-09-23, from docs/BRANCHES.md; NOT started — starts after M1 acceptance, Nikolay to
-review).** Oracle: `ref_full_jaxdump_v4` (full V4r4, 3 steps; new stages needed inside SEAICE_MODEL and EXF bulk).
+review).** Oracle: ➕ `full_jaxdump_v5` (M2.0 done 2026-09-23: 40 new full-tree stages — EXF sub-calls incl. bulk formulae locals, SEAICE_MODEL sub-calls, dynsolver, LSR per Picard pass, advdiff per field, V4r4 growth; reference/jaxdump/SUBSTEPS.md; invisible to the model).
 - M2.1 EXF full read path: adjusted-forcing fields (ERA-interim + adjustments, 6-hourly), exf_set_uv on the A grid +
   EXCH_UV_AGRID, runoff monthly (cal_getmonthsrec), exf_radiation, exf_zenithangle(+table), exf_wind (wStress, wspeed).
 - M2.2 EXF_BULKFORMULAE (Large-Yeager, fixed iteration count), EXF_GETSURFACEFLUXES, EXF_MAPFIELDS full tree.

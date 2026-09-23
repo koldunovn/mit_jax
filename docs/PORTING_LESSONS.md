@@ -300,3 +300,15 @@ Production runs may use XLA defaults (ulp-level differences only).
   floors, incl. model-side ones (geothermal x(1+1e-5); EvPrRn unset).
 - My run_jax snapshots had the tile axis in the wrong place for 3-D fields (tiles_to_compact wants tiles at -3) — the
   budgets agent found it; fixed with the compact() helper.
+
+## M2.0 — full-V4r4 dump oracle (2026-09-23, sub-agent)
+- 40 new tree-scoped stages (EXF sub-calls incl. bulk-formula locals before/after the stability iterations; SEAICE_MODEL
+  sub-calls; dynsolver; LSR per Picard pass `_p1/_p2`; advdiff per field; V4r4 seaice_growth); new kinds U: (interior
+  locals) and N: (scalars). 12.5 GB per dumped iteration. Dumps on/off byte-identical (T,S,Eta,U,V,W,PH,PHL, all
+  pickups, %MON).
+- Generated fixed-form Fortran must fit 72 columns (instrument.py re-wraps; a test checks); continuation scanning must
+  skip #ifdef lines inside a CALL (SEAICE_SOLVE4TEMP); a stage inside a loop needs a pass suffix (the dump index keeps
+  the last record of a repeated key — the test rejects duplicates).
+- Serial header indexing of a full dump directory: ~110 s on cold Lustre (3 ms/record); parallel reading ~3 s.
+- Process: the agent ran `rm -rf` once on a non-existent scratch path (nothing deleted) — against the no-deletion rule;
+  reported to Nikolay.
