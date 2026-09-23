@@ -11,7 +11,7 @@ FRAMES_DIR holds frame_<n>.npz files, each with a compact LLC90 field (1170, 90)
 MESH_RUNDIR is a Fortran run directory with the model's grid files (XC, YC, RAC, hFacC ...), read by
 nereus.mitgcm.load_mesh, whose point order is the same compact layout. Land (hFacC == 0 at the surface) is masked.
 The globe turns by --spin degrees of longitude over the whole movie (orthographic); --projection robinson draws a
-static global map on a light background instead. --stride N uses every N-th frame. Writes OUT/png/*.png, OUT.mp4 and
+static global map on a light background instead; arctic / antarctic: static polar caps (>= 50 degrees). --stride N uses every N-th frame. Writes OUT/png/*.png, OUT.mp4 and
 OUT.gif.
 """
 
@@ -54,7 +54,7 @@ def _render(a, files, idx, png):
         z = np.load(files[i])
         v = np.asarray(z[a.var], dtype=np.float64).ravel()
         v = np.where(land, np.nan, v)
-        if a.projection == "robinson":
+        if a.projection in ("robinson", "arctic", "antarctic"):
             box = [interp]
             _render_robinson(a, nr, ccrs, plt, v, lon, lat, z, png / f"{i:05d}.png", box)
             interp = box[0]
@@ -84,14 +84,24 @@ def _render(a, files, idx, png):
 
 def _render_robinson(a, nr, ccrs, plt, v, lon, lat, z, path, interp_box):
     """One static global Robinson frame, light background, land grey (interp_box[0]: reused regrid interpolator)."""
-    proj = ccrs.Robinson(central_longitude=a.lon0)
-    fig = plt.figure(figsize=(10.0, 5.9), dpi=120, facecolor="white")
-    ax = fig.add_axes([0.02, 0.15, 0.96, 0.74], projection=proj)
+    if a.projection == "robinson":
+        proj, extent = ccrs.Robinson(central_longitude=a.lon0), None
+        fig = plt.figure(figsize=(10.0, 5.9), dpi=120, facecolor="white")
+        ax = fig.add_axes([0.02, 0.15, 0.96, 0.74], projection=proj)
+    else:                                   # polar cap, lat >= 50 N or <= 50 S
+        north = a.projection == "arctic"
+        proj = ccrs.NorthPolarStereo(central_longitude=a.lon0) if north else ccrs.SouthPolarStereo(central_longitude=a.lon0)
+        extent = [-180, 180, 50, 90] if north else [-180, 180, -90, -50]
+        fig = plt.figure(figsize=(6.4, 7.4), dpi=120, facecolor="white")
+        ax = fig.add_axes([0.03, 0.14, 0.94, 0.74], projection=proj)
     ax.set_facecolor("#bdbdbd")                                   # land (masked points) shows the axes background
     fig, ax, interp_box[0] = nr.plot(v, lon, lat, projection=proj, ax=ax, interpolator=interp_box[0],
                                      method="nearest", resolution=a.resolution, cmap=a.cmap, vmin=a.vmin,
                                      vmax=a.vmax, coastlines=True, colorbar=False, land=False)
-    ax.set_global()
+    if extent is None:
+        ax.set_global()
+    else:
+        ax.set_extent(extent, crs=ccrs.PlateCarree())
     cax = fig.add_axes([0.25, 0.09, 0.5, 0.03])
     sm = plt.cm.ScalarMappable(cmap=a.cmap, norm=plt.Normalize(a.vmin, a.vmax))
     cb = fig.colorbar(sm, cax=cax, orientation="horizontal", extend="both")
@@ -120,7 +130,7 @@ def main(argv=None):
     ap.add_argument("--units", default="°C")
     ap.add_argument("--cbar-label", default="sea surface temperature")
     ap.add_argument("--jobs", type=int, default=1, help="render frames in N processes")
-    ap.add_argument("--projection", choices=("orthographic", "robinson"), default="orthographic")
+    ap.add_argument("--projection", choices=("orthographic", "robinson", "arctic", "antarctic"), default="orthographic")
     ap.add_argument("--stride", type=int, default=1, help="use every N-th frame")
     a = ap.parse_args(argv)
 

@@ -170,7 +170,8 @@ def fig_ff_year(out):
     print("wrote", out)
 
 
-def fig_full_month(out, jax_path=None):
+def fig_full_month(out, jax_path=None, f13="ref_full_serial13_1month", f96="ref_full_mpi96_1month",
+                   when="after one month (1992-02-01, it 745)", jax_label="JAX"):
     """Full V4r4 after one month (it 745), float64 restarts, signed differences on linear scales: Fortran 96 ranks -
     Fortran 13 ranks (and JAX - Fortran 13 ranks with --jax, same colour limits per panel)."""
     import cartopy.crs as ccrs
@@ -181,7 +182,6 @@ def fig_full_month(out, jax_path=None):
 
     lon, lat, land = mesh()
     wet = ~land
-    f13, f96 = "ref_full_serial13_1month", "ref_full_mpi96_1month"
     jv = {100: ("theta", 0), 400: ("etaN", None), "siAREA": ("AREA", None), "siHEFF": ("HEFF", None)}
 
     def fortran_get(run, what):
@@ -189,7 +189,7 @@ def fig_full_month(out, jax_path=None):
 
     rows = [("Fortran 96 ranks - Fortran 13 ranks", lambda what: fortran_get(f96, what))]
     if jax_path:
-        rows.append(("JAX - Fortran 13 ranks", lambda what: _jax64(jax_path, *jv[what])))
+        rows.append((f"{jax_label} - Fortran 13 ranks", lambda what: _jax64(jax_path, *jv[what])))
     panels = [("SST", 100, "degC", None, ccrs.Robinson(-150)),
               ("SSH", 400, "m", None, ccrs.Robinson(-150)),
               ("ice concentration, Arctic", "siAREA", "", [-180, 180, 55, 90], ccrs.NorthPolarStereo()),
@@ -217,7 +217,7 @@ def fig_full_month(out, jax_path=None):
                           orientation="horizontal", extend="both")
         cb.set_label(f"{name.split(',')[0]} diff{' (' + units + ')' if units else ''}", fontsize=8)
         cb.ax.tick_params(labelsize=7)
-    fig.suptitle("MITgcm ECCO v4r4 full model (EXF bulk formulae + sea ice) after one month (1992-02-01, it 745), "
+    fig.suptitle(f"MITgcm ECCO v4r4 full model (EXF bulk formulae + sea ice) {when}, "
                  "float64 restarts: signed differences (linear scale)", fontsize=12, y=0.97)
     fig.savefig(out, bbox_inches="tight")
     print("wrote", out)
@@ -225,14 +225,17 @@ def fig_full_month(out, jax_path=None):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("figure", choices=("ff_year", "full_month"))
+    ap.add_argument("figure", choices=("ff_year", "full_month", "full_year"))
     ap.add_argument("out")
     ap.add_argument("--jax", default=None, help="full_month: a JAX full-model state .npz at it 745")
     a = ap.parse_args(argv)
     if a.figure == "ff_year":
         fig_ff_year(a.out)
-    else:
+    elif a.figure == "full_month":
         fig_full_month(a.out, a.jax)
+    else:
+        fig_full_month(a.out, a.jax, "ref_full_mpi13_1year", "ref_full_mpi96_1year", "at the end of 1992 (it 8761)",
+                       "JAX (1 GH200)")
     return 0
 
 
