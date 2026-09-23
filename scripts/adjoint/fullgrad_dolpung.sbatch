@@ -31,8 +31,9 @@ if [ "${1:-}" = "--multi" ]; then
   for cfg in "$@"; do
     echo "=== GPU $i: $cfg"
     LOG=$LOGDIR/m2-${SLURM_JOB_ID}-gpu$i.out
+    # no numactl binding: with --cpus-per-task < the whole node the job's cpuset need not cover NUMA node $i
+    # (numactl --cpunodebind=$i then fails with "Invalid argument" and the process never starts)
     BIND=""
-    command -v numactl >/dev/null && BIND="numactl --cpunodebind=$i --preferred=$i"
     (
       IFS=$'\n'
       for sub in $(echo "$cfg" | sed 's/ +++ /\n/g'); do
