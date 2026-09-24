@@ -160,7 +160,7 @@ def traces(a, fig_dir):
         print("wrote", fig_dir / "amplification_traces_full.png")
     fd = [r for r in rs if r["action"] == "fd"]
     grads = {(r["days"], r["mode"]): r for r in rs if r["action"] == "grad" and r.get("repeat", 0) == 0
-             and r.get("nproc", 1) == 1}
+             and r.get("nproc", 1) == 1 and r.get("ice_weight", 1.0) == 1.0}
     if fd:
         dirs = sorted({r["direction"] for r in fd})
         fig, axs = plt.subplots(1, len(dirs), figsize=(3.2 * len(dirs), 3.6), sharey=True)
@@ -172,7 +172,9 @@ def traces(a, fig_dir):
                     gref = grads.get((days, mode))
                     if gref is None:
                         continue
-                    ad = gref["dirderiv"][n]
+                    ad = gref["dirderiv"].get(n)
+                    if ad is None:
+                        continue
                     err = [max(abs(r["fd"] - ad) / max(abs(ad), 1e-300), 1e-16) for r in sel]
                     ax.loglog([r["h"] for r in sel], err, ls, marker="o", label=f"{mode} {days:g} d")
             ax.axhline(1e-3, color="0.6", lw=0.8)
