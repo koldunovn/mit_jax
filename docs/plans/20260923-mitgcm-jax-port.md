@@ -414,6 +414,13 @@ parallel on the 4 GPUs of a node).
   interpolation data are for the production 30x30 tiles (profiles_init_fixed.F:522-526) — JAX (13 x 90x90) must
   recompute the interpolation from the profile positions (and the gate compares against the 96-rank Fortran's
   profile misfits); sshv4-mdt reads RADS 1993-2017 for any window.
+- ➕ M4 decisions (Nikolay, 2026-09-24): the estimation uses the FULL model (bulk-formula EXF + sea ice) with the V4r4
+  controls (initial T/S, mixing, time-varying atmospheric-state adjustments of data.ctrl.iter0.inclatmctrl), as the
+  V4r4 optimisation did (the flux-forced tree replays the adjusted fluxes: circular for estimation). Sea-ice adjoint
+  level: `no_dynamics` (thermodynamics differentiated exactly, dynamics skipped; 3.2 forwards per gradient, as ecco),
+  so the sea-ice concentration misfit (siv4-conc) gets a real gradient; V4r4's proxy terms (siv4-deconc: SST where the
+  model lacks ice; siv4-exconc: HEFF where it has too much; cost_gencost_customize.F:204-213) are ported too, for
+  comparability with V4r4 (where useSEAICEinAdMode=F leaves siv4-conc without an adjoint path).
 - M4.1 Cost function: port pkg/ecco gencost (altimetry: along-track SLA + MDT; SST; sea-ice concentration; SSS and
   GRACE bottom pressure only if the window has them) and pkg/profiles (CTD/XBT/Argo interpolation in space and time),
   with their averaging operators, weights/uncertainties and smoothing; gate: every J term equal to the Fortran's at
