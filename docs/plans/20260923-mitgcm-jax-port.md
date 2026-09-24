@@ -440,8 +440,13 @@ parallel on the 4 GPUs of a node).
   ECCO's own iterations, and the measured cost per iteration (GPU hours) vs ECCO's CPU cost.
 
 ### Task 22: Verify acceptance criteria (after M2)
-- [ ] 1-yr full V4r4 within Fortran run-to-run spread; sharded multi-week gradient validated per Task 21 criteria in both modes
-- [ ] tier 1 < 10 min and < 100 tests; tier 2 green
+- [x] 1-yr full V4r4 within Fortran run-to-run spread; sharded multi-week gradient validated per Task 21 criteria in both modes
+  ➕ 2026-09-24: full-V4r4 month on CPU bitwise vs Fortran 13 ranks; GPU year: all 124 %MON statistics inside the
+  Fortran 96-vs-13-rank spread (100-1000x margin); M2 adjoint acceptance 7/14/28 d in ecco / exact_nodyn / exact_full
+  (docs/ADJOINT_RESULTS.md M2 section; decisions M2.7); 4 GH200 == 1 GH200 (ecco 7 d bitwise state, gradient at the
+  repeat floor).
+- [ ] tier 1 < 10 min and < 100 tests; tier 2 green  ➕ 2026-09-24: tier 1 = 100 tests (at the limit: move a few to
+  tier1x); tier 2 partly re-run (test_seaice_lsr_gpu, test_adjoint_regression_full pass) — full tier-2 run next session
 - [ ] no `ragged_all_to_all`, no unbannered deviations (grep audit)
 
 ### Task 23: [Final] Update documentation

@@ -874,7 +874,17 @@ sensitivity of Task 21.
 Wall clock (GH200, compilation included): 7 d all modes + FD + TL in one 4-GPU job 1 h 42 min (the exact_full
 gradients, screen and TL dominate); 28 d ecco + exact_nodyn + FD (8 directions) 1 h 52 min.
 
-## M2.7 Open questions (for Nikolay)
+## M2.7 Decisions (Nikolay, 2026-09-24)
+1. Sea-ice FD bar: judged against a forward with the converged LSR (the ADJOINT_MODES.md rule); the remaining single
+   columns (atemp_arctic_pt 14 d, 28 d against exact_full) are run that way when needed.
+2. Air-temperature footprints: accepted as switch-limited (as TFLUX in Task 21); single-column directions carry the FD
+   check. No smoothed switch.
+3. M4 wind-stress controls enter where V4r4 applies them (EXF_GETSURFACEFLUXES).
+4. M4 sea-ice adjoint level: no_dynamics (plan M4 decisions; V4r4's siv4 proxy terms ported for comparability).
+5. Exact-mode repeat spread 9e-11 (14 d) recorded as the floor for the exact modes.
+6. Fake-CPU-device sharded gradients of the full tree are dropped as a check; the 4-GPU run is the reference.
+
+## M2.7 Open questions (as asked, answered above)
 
 1. **FD bar for sea-ice directions beyond 7 days.** Single sea-ice columns keep a constant ~3e-3 FD-vs-adjoint offset
    at 14 d against the production forward; against a converged LSR (1e-8) it drops to 2.5e-4 / 3.0e-4 (heff_pt).
