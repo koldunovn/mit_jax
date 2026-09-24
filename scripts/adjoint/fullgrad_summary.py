@@ -128,6 +128,33 @@ def fd_tables(rs, ref_mode, P):
     P("")
 
 
+def fdeval_tables(rs, ref_mode, P):
+    """FD from single +-h evaluations (action fdeval, e.g. with a converged LSR forward), vs the ref-mode adjoint."""
+    ev = [r for r in rs if r["action"] == "fd_eval"]
+    if not ev:
+        return
+    G = grads_by(rs)
+    P(f"### FD from paired single evaluations (fdeval; LSR settings per row) vs the {ref_mode} adjoint\n")
+    P("| window | direction | LSR_ERROR / max iter | h | FD | FD J_ice part | AD | rel. error | J_ice part rel. error | jobs |")
+    P("|---|---|---|---|---|---|---|---|---|---|")
+    keys = sorted({(r["days"], r["direction"], r.get("lsr_error"), r.get("lsr_maxiter"), r["h"]) for r in ev})
+    for days, n, le, lm, h in keys:
+        sel = {r["sign"]: r for r in ev if (r["days"], r["direction"], r.get("lsr_error"), r.get("lsr_maxiter"),
+                                             r["h"]) == (days, n, le, lm, h)}
+        if 1.0 not in sel or -1.0 not in sel:
+            continue
+        p, m = sel[1.0], sel[-1.0]
+        fd = (p["J"] - m["J"]) / (2 * h)
+        fdi = (p["J_ice"] - m["J_ice"]) / (2 * h)
+        ad = dirderiv(G, (days, ref_mode, 1, 1.0), n, p)
+        ad0 = dirderiv(G, (days, ref_mode, 1, 0.0), n, p)
+        adi = None if (ad is None or ad0 is None) else ad - ad0
+        P(f"| {days:g} d | {n} | {le:g} / {lm} | {h:g} | {fd:.6e} | {fdi:.6e} | {e(ad, '{:.6e}')} | "
+          f"{e(None if ad is None else abs(fd - ad) / abs(ad))} | {e(None if adi is None else abs(fdi - adi) / abs(adi))}"
+          f" | {p['job']},{m['job']} |")
+    P("")
+
+
 def tl_tables(rs, P):
     tl = [r for r in rs if r["action"] == "tl" and "rel" in r]
     if not tl:
@@ -302,6 +329,7 @@ def main():
     rs = rows(a.dirs)
     P = print
     fd_tables(rs, a.ref_mode, P)
+    fdeval_tables(rs, a.ref_mode, P)
     if a.ref_mode != "exact_nodyn":
         fd_tables(rs, "exact_nodyn", P)
     tl_tables(rs, P)
