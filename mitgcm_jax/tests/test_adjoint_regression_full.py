@@ -3,8 +3,8 @@ short window.
 
 scripts/adjoint/fullgrad.py over ONE day (24 steps, two 12-step chunks) of the production full V4r4 run (bulk-formula
 EXF + sea ice, useCTRL=T; initial state from the cache that multiweek_grad.py --actions cache builds for the full run
-directory, bitwise the Fortran start-of-run state), J = box-mean theta (adjsen box, K) + Arctic mean ice thickness at the
-end (m), controls theta0, kapGM, HEFF0 and the EXF atmospheric-state adjustments, in the ecco mode and the exact mode
+directory, bitwise the Fortran start-of-run state), J = box-mean theta (adjsen box, K) + Arctic mean ice thickness at
+the end (m), controls theta0, kapGM, HEFF0 and the EXF atmospheric-state adjustments, in the ecco mode and the exact mode
 with the full sea-ice derivative. J and the gradient (norm per control, directional derivatives) must reproduce the
 values recorded on the same GPU kind.
 
@@ -32,7 +32,41 @@ CACHE = Path("/work/ab0995/a270088/MIT/runs/adjoint_m2/init_ref_full_serial13_1d
 OUT_ROOT = Path("/work/ab0995/a270088/MIT/runs_jax/tier2")
 
 # {device_kind: {mode: recorded row subset}}; default XLA flags, sum_unroll=5, one day, chunk 12
-RECORDED = {}
+RECORDED = {
+    # job 27657600 (GH200, dolpung): J bitwise in both modes, negative-control assertions passed. Left out: the
+    # ecco values of atemp_arctic / atemp_arctic_pt (round-off-level numbers: no sea-ice adjoint in ecco mode)
+    "NVIDIA GH200 120GB": {
+        "ecco": {
+            "J": 13.68031412817452,
+            "grad_norm":
+                {"aqh": 0.0013717908963728263, "atemp": 4.090562885855107e-07, "heff": 0.012840996204107552,
+                 "kapGM": 5.6810902237176114e-08, "lwdown": 2.206175136208766e-08, "precip": 80.16092273915794,
+                 "swdown": 2.366199764004705e-08, "tauu": 0.004266690193651703, "tauv": 0.004847089948363971,
+                 "theta": 0.017383618718426395},
+            "dirderiv":
+                {"theta_A_centre": 0.00023573140221861864, "theta_B_above": 1.0429481536016608e-05,
+                 "theta_C_south": 2.5844308633761593e-06, "kapGM_scale": 0.00023027265498145078,
+                 "atemp_box": -4.89242792301795e-07, "tauu_box": -0.0019874885841498066,
+                 "heff_arctic": 1.0369654175979914, "atemp_pt": 6.197053450921258e-09,
+                 "heff_pt": 0.00016648997673671475},
+        },
+        "exact_full": {
+            "J": 13.68031412817452,
+            "grad_norm":
+                {"aqh": 0.046395819002884274, "atemp": 1.8922331033998037e-05, "heff": 0.011862890858605604,
+                 "kapGM": 5.699762971418107e-08, "lwdown": 8.220176706719961e-07, "precip": 156.1499838920965,
+                 "swdown": 4.0622429164682284e-07, "tauu": 0.004293085660925946, "tauv": 0.0048859739939973845,
+                 "theta": 0.01744968517458154},
+            "dirderiv":
+                {"theta_A_centre": 0.00023575073424959215, "theta_B_above": 9.84103752930497e-06,
+                 "theta_C_south": 2.5293452721339116e-06, "kapGM_scale": 0.0002702791673034752,
+                 "atemp_box": -5.751231559230375e-07, "tauu_box": -0.0020294567058242764,
+                 "atemp_arctic": -0.0006851184701818948, "heff_arctic": 1.0312137231643692,
+                 "atemp_pt": 6.13640496657793e-09, "atemp_arctic_pt": -2.785895941356301e-08,
+                 "heff_pt": 0.00016630875749589898},
+        },
+    },
+}
 
 
 def _run(mode):
