@@ -191,8 +191,17 @@ class FullExperiment:
         if P.exfb is None or P.seaice is None:
             raise ValueError(f"{a.rundir}: not a full-tree run directory (bulk-formula EXF + sea ice)")
         if a.lsr_impl:
-            P = P._replace(seaice=dataclasses.replace(
-                P.seaice, dyn=dataclasses.replace(P.seaice.dyn, lsr_impl=a.lsr_impl)))
+            P = P._replace(seaice=P.seaice._replace(dyn=dataclasses.replace(P.seaice.dyn, lsr_impl=a.lsr_impl)))
+        if a.lsr_error or a.lsr_maxiter:
+            # a converged LSR forward (same code path) for FD checks of the implicit sea-ice derivative
+            # (docs/ADJOINT_MODES.md: production LSR_ERROR = 2e-4 stops far from the solution the derivative is of)
+            kw = {}
+            if a.lsr_error:
+                kw["LSR_ERROR"] = float(a.lsr_error)
+            if a.lsr_maxiter:
+                kw["SEAICElinearIterMax"] = int(a.lsr_maxiter)
+            P = P._replace(seaice=P.seaice._replace(dyn=dataclasses.replace(P.seaice.dyn, **kw)))
+            log(f"LSR overrides (not the production forward): {kw}")
         # strongly typed State (a weakly typed field would compile a second program; run_jax.py does the same)
         st0 = State({k: jnp.asarray(v, dtype=np.asarray(v).dtype) for k, v in st0.f.items()}, st0.it)
         self.P, self.g, self.ex, self.kLowC = P, g, ex, kLowC
@@ -417,7 +426,8 @@ class FullExperiment:
                     device=str(jax.devices()[0].device_kind), platform=jax.devices()[0].platform,
                     ndevices=len(jax.devices()), xla_flags=os.environ.get("XLA_FLAGS", ""), rundir=str(self.a.rundir),
                     box_vol=self.box_vol, arctic_area=self.arctic_area, j_scaling="kelvin",
-                    lsr_impl=self.P.seaice.dyn.lsr_impl)
+                    lsr_impl=self.P.seaice.dyn.lsr_impl, lsr_error=float(self.P.seaice.dyn.LSR_ERROR),
+                    lsr_maxiter=int(self.P.seaice.dyn.SEAICElinearIterMax))
 
     def controls(self):
         return {k: self.theta0[k] for k in self.a.controls.split(",")}
@@ -674,6 +684,27 @@ def action_fd(E, mode, out, log):
             emit(out, row, log)
 
 
+def action_fdeval(E, mode, out, log):
+    """One forward J (both parts) at theta0 + sign * h * d for the single --dirs direction and --hs value, sign from
+    --fd-sign (+1, -1; 0 = the base point): the +-h evaluations of a costly (e.g. converged-LSR) FD run in parallel
+    processes; the summary pairs them."""
+    a = E.a
+    step, _ = E.step(mode)
+    Jf = objective_parts(E, step)
+    xs_d = jax.device_put(E.xs)
+    th = E.controls()
+    n = a.dirs
+    h = float(a.hs)
+    sgn = float(a.fd_sign)
+    d = {k: jnp.asarray(E.dirs[n][k]) for k in th}
+    t = time.time()
+    jt, ji = Jf(jax.tree.map(lambda x, y: x + sgn * h * y, th, d), E.fm0, E.st0, xs_d)
+    jt, ji = float(jt), float(ji)
+    row = E.rowbase("fd_eval", mode)
+    row.update(direction=n, where=E.where[n], h=h, sign=sgn, J=jt + ji, J_theta=jt, J_ice=ji, wall_s=time.time() - t)
+    emit(out, row, log)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", required=True, help="output directory (created; must not exist unless --append)")
@@ -689,6 +720,9 @@ def main(argv=None):
     ap.add_argument("--schedule", default="step")
     ap.add_argument("--unroll", type=int, default=5, help="Cg2dParams.sum_unroll (bitwise; 5 for GPU)")
     ap.add_argument("--lsr-impl", default="", help="override SeaiceDynParams.lsr_impl (default: the setup's, auto)")
+    ap.add_argument("--lsr-error", default="", help="override LSR_ERROR (converged-LSR FD checks; not production)")
+    ap.add_argument("--lsr-maxiter", default="", help="override SEAICElinearIterMax (with --lsr-error)")
+    ap.add_argument("--fd-sign", default="1", help="fdeval: +1, -1 or 0 (base point)")
     ap.add_argument("--controls", default="theta,kapGM,heff,atemp,aqh,tauu,tauv,swdown,lwdown,precip")
     ap.add_argument("--ice-weight", type=float, default=1.0, help="w_ice in J = J_theta + w_ice J_ice")
     ap.add_argument("--nproc", type=int, default=1, help="devices (shard_map over tiles) for grad / fwdcheck")
@@ -728,6 +762,8 @@ def main(argv=None):
             action_tl(E, a.mode, out, log)
         elif act == "fd":
             action_fd(E, a.mode, out, log)
+        elif act == "fdeval":
+            action_fdeval(E, a.mode, out, log)
         else:
             raise ValueError(act)
         gr.memory_note(f"after {act} ({time.time() - t:.0f} s)", log)
