@@ -26,10 +26,12 @@ from pathlib import Path
 import jax
 import pytest
 
+from mitgcm_jax import paths
+
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "adjoint" / "fullgrad.py"
-CACHE = Path("/work/ab0995/a270088/MIT/runs/adjoint_m2/init_ref_full_serial13_1day")   # fullgrad.CACHE
-OUT_ROOT = Path("/work/ab0995/a270088/MIT/runs_jax/tier2")
+CACHE = paths.RUNS / "adjoint_m2" / "init_ref_full_serial13_1day"   # fullgrad.CACHE
+OUT_ROOT = paths.RUNS_JAX / "tier2"
 
 # {device_kind: {mode: recorded row subset}}; default XLA flags, sum_unroll=5, one day, chunk 12
 RECORDED = {

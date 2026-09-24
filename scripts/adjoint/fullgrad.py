@@ -117,14 +117,15 @@ import multiweek_grad as mw  # noqa: E402  (also puts the repo root on sys.path 
 import jax  # noqa: E402
 import jax.numpy as jnp  # noqa: E402
 
+from mitgcm_jax import paths  # noqa: E402
 from mitgcm_jax.adjoint import checkpoint as ck  # noqa: E402
 from mitgcm_jax.adjoint import grad as gr  # noqa: E402
 from mitgcm_jax.adjoint.modes import AdjointConfig  # noqa: E402
 from mitgcm_jax.params_io import RunNamelists  # noqa: E402
 from mitgcm_jax.state import State  # noqa: E402
 
-RUNDIR = Path("/work/ab0995/a270088/MIT/reference/runs/ref_full_serial13_1day")
-CACHE = Path("/work/ab0995/a270088/MIT/runs/adjoint_m2/init_ref_full_serial13_1day")
+RUNDIR = paths.REFERENCE_RUNS / "ref_full_serial13_1day"
+CACHE = paths.RUNS / "adjoint_m2" / "init_ref_full_serial13_1day"
 ARCTIC_LAT = 70.0            # J_ice region: yC > 70N (as J1 of scripts/adjoint/seaice_window.py)
 # control name -> EXF record-buffer name (pkgs/exf_full.FIELDS)
 FORCING = {"atemp": "atemp", "aqh": "aqh", "tauu": "ustress", "tauv": "vstress", "swdown": "swdown",
