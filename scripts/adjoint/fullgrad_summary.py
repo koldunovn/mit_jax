@@ -81,8 +81,8 @@ def fd_tables(rs, ref_mode, P):
     P(f"### FD h-sweep vs the {ref_mode} adjoint, per named direction\n")
     P(f"Relative error |FD - AD| / |AD| at each h, AD = the {ref_mode} adjoint (r0, J = J_theta + J_ice); plateau = "
       f"number of h with rel. error <= {BAR_FD:g} (bar: >= 2 of 4); J_theta / J_ice parts: the same against the "
-      f"ice-weight-0 adjoint (J_theta) and the difference (J_ice), where both parts were recorded and the part is "
-      f"not negligible; the other modes' adjoints relative to the best FD value.\n")
+      f"ice-weight-0 adjoint (J_theta) and the difference (J_ice), where both parts were recorded and the part carries "
+      f">= 0.1 % of the derivative; the other modes' adjoints relative to the best FD value.\n")
     P(f"| window | direction | AD {ref_mode} | TL {ref_mode} | FD rel. error at h = ... | plateau | J_theta part: "
       f"errors, plateau | J_ice part: errors, plateau | other modes rel. to best FD | FD job |")
     P("|---|---|---|---|---|---|---|---|---|---|")
@@ -104,8 +104,8 @@ def fd_tables(rs, ref_mode, P):
             ad0 = dirderiv(G, (days, ref_mode, 1, 0.0), n, sel[0])
             if ad0 is not None and all("fd_theta" in r for r in sel):
                 for ip, (lab, adp) in enumerate((("fd_theta", ad0), ("fd_ice", ad - ad0))):
-                    if abs(adp) <= 1e-6 * abs(ad):
-                        parts[ip] = f"negligible ({adp:.1e})"
+                    if abs(adp) <= 1e-3 * abs(ad):     # < 0.1 % of J's derivative: FD of that part is noise
+                        parts[ip] = f"not tested ({adp / ad:.0e} of AD)"
                         continue
                     pe = [abs(r[lab] - adp) / abs(adp) for r in sel]
                     parts[ip] = "; ".join(f"{x:.1e}" for x in pe) + f" ({sum(x <= BAR_FD for x in pe)}/{len(pe)})"

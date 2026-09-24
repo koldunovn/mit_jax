@@ -504,3 +504,37 @@ Production runs may use XLA defaults (ulp-level differences only).
   JAX grid (`tools/write_grid_mds.py`), so movies need no Fortran run.
 - NASA CMR sometimes times out or returns partial granule lists (2026-09-24: `list` found 3 of 4 small archives, then
   nothing); "no granules" from `fetch_eccov4r4.py list` is not proof that a file was withdrawn.
+
+## M2 adjoint acceptance: full-V4r4 multi-week gradient (plan Task 22, 2026-09-24, sub-agent)
+- **Reuse the M1 driver as a module.** `scripts/adjoint/fullgrad.py` imports `multiweek_grad` (model loading, FModel
+  buffer adjustments, carried constants, screen statistics) and adds only the full-tree cost, controls and modes: the
+  flux-forced driver and its tier-2 test stay byte-identical.
+- **A sea-ice cost is invisible to the ECCO adjoint.** With seaice="ecco" SEAICE_MODEL's reverse is the identity, so
+  J_ice (end-of-window Arctic ice) has no derivative with respect to the atmosphere or the ocean: only dJ/dHEFF0 = the
+  cost weights. The atmospheric-control gradient norms of the combined cost are 10x smaller in ecco mode than exact.
+- **Surface-flux footprint directions are switch-limited for FD.** atemp over 624 box columns (and over 6092 Arctic
+  columns) keeps a 2e-3 - 6e-2 FD error at every h over three decades, while TL = adjoint along the same direction:
+  the bulk formulae switch their Stanton number at the sign of the air-sea temperature difference / Monin-Obukhov
+  length, and sea-ice growth has exact-zero branches, so the number of flipped switches grows with h. Use
+  single-column (grdchk-like) directions for FD checks of atmospheric controls.
+- **TL and adjoint linearise slightly different trajectories.** The jvp program's forward J differs from the chunked
+  forward by 4e-14 (7 d) - 1e-13 (14 d) relative (XLA fuses the forward with the tangent differently), and sea-ice
+  exact-zero branches turn that into a TL/adjoint difference of up to 5e-10 in the exact modes (ecco: 1e-15).
+- **no_dynamics pass-through fields accumulate in the screen.** UICE/VICE cotangents grow ~linearly (the skipped LSR is
+  the identity); screen the sea-ice thermodynamic state (AREA, HEFF, HSNOW, TICES) separately.
+- **GH200 nodes: bind each process to its Grace socket.** `--cpus-per-task=64` gives CPUs 0-63 (socket 0) to all four
+  per-GPU processes; their host-side chunk boundaries (29 GB each at 14 d) filled NUMA node 0 and slowed a 14-day run
+  4-12x (kswapd active, one compile 24 min). Request all 288 CPUs and bind process i to node i (fullgrad.numa_bind_to_gpu: CPU
+  affinity + set_mempolicy(MPOL_PREFERRED)); `numactl --cpunodebind=i` fails when the cpuset lacks node i's CPUs.
+  An inconsistent `scontrol update NumCPUs` (CPUs/Task left at 64) left a job pending with reason "Reservation".
+- **shard_map + scan: type the carry init.** The implicit-LSR preconditioner's zero first iterate was invariant while
+  the returned carry varies over the tile axis: no sea-ice derivative ("no_dynamics"/"full") traced at P > 1. Typing
+  the init varying (lax.pcast to bl's axes, nothing on one device) fixed it; P=4 tangent and adjoint = P=1 to round-off
+  (test_lsr_sharded_p4_derivative; negative control: the old _precond fails the test).
+- **Sharded full model on 4 GH200:** final State bitwise = 1 GPU after 7 days (every prognostic and sea-ice field);
+  gradient within the repeat floor (1.1e-14 vs 1.3e-14); J differs by 1-2 ulp (padded cost sum order); 10 % slower
+  than one GPU, half the device memory per GPU.
+- **Fake CPU devices are not a stand-in for the sharded gradient driver here.** On 4 fake CPU devices the chunked
+  gradient of the full tree came out NaN, and variants of the same chunk VJP either were finite (eager or jitted with
+  the model closed over) or deadlocked (model as a jit argument: device threads waiting in different collectives, an
+  all-reduce and a collective-permute, at the same time). The same driver on 4 GH200 is correct. Open.
