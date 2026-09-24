@@ -517,6 +517,10 @@ Production runs may use XLA defaults (ulp-level differences only).
   the bulk formulae switch their Stanton number at the sign of the air-sea temperature difference / Monin-Obukhov
   length, and sea-ice growth has exact-zero branches, so the number of flipped switches grows with h. Use
   single-column (grdchk-like) directions for FD checks of atmospheric controls.
+- **A constant FD bias is not switch noise.** From 14 days on, single sea-ice columns showed FD - adjoint = 3e-3 at
+  every h (switch noise would scatter with h). A forward with the LSR converged to 1e-8 (same code path, 25x the forward
+  cost) brought it to 3e-4: the implicit LSR derivative is that of the converged system, the production forward stops
+  at LSR_ERROR 2e-4. Check sea-ice FD against a converged forward (docs/ADJOINT_MODES.md).
 - **TL and adjoint linearise slightly different trajectories.** The jvp program's forward J differs from the chunked
   forward by 4e-14 (7 d) - 1e-13 (14 d) relative (XLA fuses the forward with the tangent differently), and sea-ice
   exact-zero branches turn that into a TL/adjoint difference of up to 5e-10 in the exact modes (ecco: 1e-15).

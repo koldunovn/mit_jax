@@ -344,3 +344,556 @@ windows 56-365 d in exact and ecco mode, 130/150/240/300-d exact screens, 365-d 
   where the screen localises the burst.
 - GH200 cost: forward 0.081 s/step, warm gradient 0.36-0.40 s/step (4.5-5 forwards), device peak 43 GB flat, host RSS
   <= 107 GB at 365 d (GH200 host memory ~122 GB per GPU: EXF buffers stored once, boundary stride ~sqrt(chunks)).
+
+# M2 adjoint acceptance: multi-week gradients of the full V4r4 model (plan Task 22)
+
+2026-09-24. The JAX port of the **full** V4r4 configuration (EXF bulk formulae + sea ice), production set-up, NVIDIA
+GH200 (dolpung), one GPU per run; the sharded check on 4 GH200 of one node. Driver: `scripts/adjoint/fullgrad.py`
+(imports the M1 driver `multiweek_grad.py` unchanged; `fullgrad_dolpung.sbatch`), tables
+`scripts/adjoint/fullgrad_summary.py`, figures `scripts/adjoint/plot_fullgrad.py` (nereus env). Rows (job id, git
+HEAD, device, XLA flags, mode and freezes, window, chunk, stride, ice weight, h or seed, memory, times) in
+`/work/ab0995/a270088/MIT/runs/adjoint_m2/w{07,14,28}/<run>/results.jsonl`, gradient fields next to them
+(`grad_<mode>_<days>d_r<repeat>.npz`, interior points, float64). Branch `m2-acceptance` (worktree
+`/work/ab0995/a270088/MIT/dev/wt_m2acc`); model code = master plus the `seaice_lsr._precond` shard_map fix
+(finding 9, docs/PORTING_LESSONS.md).
+
+## M2.1 Set-up
+
+**Model.** Run directory `reference/runs/ref_full_serial13_1day` (production full tree: `useCTRL=T` with the WC01
+initial-state and mixing adjustments, bulk formulae, SEAICE_MODEL, 6-hourly adjusted ERA-interim), start 1992-01-01
+(`nIter0=1`), dt = 3600 s. Initial state from `init.state_from_pickup` (incl. `pickup_seaice`), computed once on CPU
+with the gate XLA flags (bitwise the Fortran start-of-run state, M2.6a) and cached in
+`/work/ab0995/a270088/MIT/runs/adjoint_m2/init_ref_full_serial13_1day` (setup 89 s + init 107 s, 32 cores; 125 State
+fields). GPU runs: XLA default flags, `sum_unroll=5`, LSR forward sweep = Pallas kernel (`lsr_impl` auto). Windows 7,
+14, 28 days = 168, 336, 672 steps.
+
+**Cost.** `J = J_theta + J_ice`:
+- `J_theta` = the Task 21 adjsen box-mean theta, running mean over the window, in K (the adjsen box as written:
+  120E-180E, 5N-16N, levels 15-20, 3743 wet cells; `multiweek_grad --j-scaling kelvin` semantics);
+- `J_ice` = Arctic ice volume at the end of the window divided by the fixed ocean area north of 70N (6092 surface
+  cells, 1.124e13 m^2): the Arctic-mean effective ice thickness in m (same region as J1 of the sea-ice-only study).
+J = 13.751 (7 d; J_theta 12.626 K, J_ice 1.125 m), 13.817 (14 d), 13.940 (28 d; 12.626 K, 1.314 m). The two parts live
+in different regions; each named direction tests one or the other (per-part FD: FD rows record both parts, the J_theta
+adjoint comes from a gradient with `--ice-weight 0`, the J_ice adjoint as the difference).
+
+**Controls** (one pytree; zero = the production forward, value-identical):
+
+| control | shape | how it enters |
+|---|---|---|
+| `theta`, `kapGM` | 3-D | as Task 21 (xx_theta / xx_kapgm paths: interior add + EXCH_XYZ_RL) |
+| `heff` | 2-D | initial HEFF (interior add + EXCH_XY_RL); not a V4r4 control: the sea-ice sensitivity map |
+| `atemp`, `aqh`, `tauu`, `tauv`, `swdown`, `lwdown`, `precip` | 2-D | time-constant adjustments of the EXF atmospheric state (the V4r4 gentim2d set, `data.ctrl.iter0.inclatmctrl`) in the units and sign of the EXF field after EXF_SET_FLD: added to both record buffers of every step divided by `exf_inscal_<field>` (-1 for ustress, vstress, swdown, lwdown), so the interpolated field moves by the adjustment; they enter before EXF_RADIATION / EXF_WIND / EXF_BULKFORMULAE like ctrl_map_gentim2d's xx_atemp, ... . `tauu/tauv` are eastward/northward stress before the A-grid rotation; unlike xx_tauu (added in EXF_GETSURFACEFLUXES, after EXF_WIND) they also enter EXF_WIND (wStress, cw/sw -> uwind/vwind of the sea-ice air drag). |
+
+**Named directions** (Fortran indices; FD and TL):
+
+| name | definition |
+|---|---|
+| theta_A_centre, theta_B_above, theta_C_south, kapGM_scale | as Task 21 (box centre 149.5E 10.5N 195 m; 140 m above; 3.6N south; dJ/d ln kapGM) |
+| atemp_box | +1 K atemp over the 624 box columns |
+| tauu_box | +1 N/m^2 eastward stress over the 624 box columns |
+| atemp_arctic | +1 K atemp over the 6092 ocean columns north of 70N |
+| heff_arctic | direction = HEFF0 north of 70N (dJ/d ln HEFF0) |
+| atemp_pt | +1 K atemp at the surface column of theta_A (one column) |
+| atemp_arctic_pt, heff_pt | +1 K atemp / +1 m HEFF0 at one Canada Basin column (150.5W, 77.8N; HEFF0 = 1.61 m) |
+
+**Modes** (forward values identical, checked): `ecco` = `AdjointConfig.ecco(nml)` of the full run directory (seaice
+"ecco" = SEAICE_MODEL skipped in reverse, ggl90 frozen, salt_plume off, gm_sigma stable, cg2d passive, viscFacInAd 1);
+`exact_nodyn` = `AdjointConfig(seaice="no_dynamics")` (exact ocean, sea-ice thermodynamics/advection adjoint, LSR
+skipped in reverse); `exact_full` = `AdjointConfig(seaice="full")` (exact; LSR by its implicit derivative). The FD
+reference is exact_full where it was run (7, 14 d) and exact_nodyn at 28 d. Note (docs/ADJOINT_MODES.md, Nikolay
+2026-09-23): the full derivative is that of the converged LSR system; the production forward stops at LSR_ERROR = 2e-4.
+
+**Drivers, screen.** As Task 21: chunks of 24 steps, stride 1, per-step remat, cg2d solution saved; FD and TL on one
+jitted whole-window scan. Screen: terminal seed (end-of-window box mean + J_ice), per-field chunk-boundary norms; groups
+dynamic (all but the carried constants gt/gsNm_1,2, hFac_surfC/W/S, saltflx, snowprecip), theta, prognostic
+(theta, salt, uVel, vVel, etaN), seaice (AREA, HEFF, HSNOW, TICES, UICE, VICE) and seaice_thermo (without UICE,
+VICE, whose cotangent accumulates in exact_nodyn: the skipped LSR is the identity).
+
+## M2.2 Acceptance summary
+
+One GH200 per run; every number is from the tables in M2.3 (job ids there). FD reference: exact_full at 7 and 14 d,
+exact_nodyn at 28 d (exact_full not run there). "part" = the FD of the cost part the direction acts on (J_theta: box;
+J_ice: Arctic) against that part's adjoint.
+
+| criterion | bar | 7 d (168 steps) | 14 d (336 steps) | 28 d (672 steps) |
+|---|---|---|---|---|
+| **exact**: FD plateau, ocean state + stress: theta_A/B/C, tauu_box, J_theta part of kapGM_scale | >= 2 of 4 h with rel. error <= 1e-3 | 5/5 (all 4/4; 1e-6 .. 5e-4) | 5/5 (4/4) | 5/5 (4/4) |
+| **exact**: FD plateau, sea-ice thickness: heff_arctic, heff_pt | same | 2/2 (4/4; 8e-5 .. 7e-4) | heff_arctic 4/4; heff_pt 1/4 (2.6e-3 .. 2.8e-3 at 3 of 4 h, constant in h) | 0/2 vs exact_nodyn (constant 5.5e-3: the dynamics derivative nodyn leaves out) |
+| **exact**: FD with a converged LSR forward (LSR_ERROR 1e-8), heff_pt | same | - | 2/2 h (2.5e-4, 3.0e-4; production forward: 2.7e-3, 2.8e-3 at the same h) | - |
+| **exact**: FD plateau, air temperature, one column: atemp_pt (J_theta), atemp_arctic_pt (J_ice) | same | 2/2 (2/4, 3/4) | 0/2 (1/4; 0/4 at a constant 2.9e-3 .. 3.6e-3) | 0/2 (0/4, 0/4) |
+| **exact**: FD, footprint / global directions: atemp_box, atemp_arctic, J_ice part of kapGM_scale | recorded (switch-limited) | 0/4 (2e-3 .. 9e-3); 1/4; 0/4 (4e-3 .. 3e-2) | 1/4; 1/4; 0/4 | 2/4; 0/4; 0/4 |
+| **exact**: TL (jax.jvp) vs adjoint, combined direction, amplitude 1 and 1e-6 | round-off | full 3.0e-13, 3.0e-13; nodyn 3.9e-13, 4.0e-13 | full 1.1e-11, 1.1e-11; nodyn 9.1e-12, 9.1e-12 | nodyn 3.4e-12, 3.4e-12 |
+| **exact**: TL vs adjoint, each named direction (max) | round-off | nodyn 2.1e-11 | nodyn 4.7e-10 | nodyn 2.6e-10 |
+| **exact**: screen, theta / prognostic / sea-ice thermo: median, worst-3 per step | <= 1.010, <= 1.030 (log-spread <= 0.020) | full 1.00007/1.00041; 0.99905/1.00089; 1.00020/1.00035: pass (nodyn the same) | full 1.00004/1.00040; 1.00011/1.00132; 1.00068/1.00089: pass (nodyn the same) | nodyn 1.00010/1.00041; 1.00034/1.00123; 1.00030/1.00090: pass |
+| **ecco**: forward == exact forwards (bytes, 126 State fields + both cost parts, whole window) | bitwise | bitwise (vs nodyn and full) | bitwise | bitwise |
+| **ecco**: screen (same norms) | as above | 0.99997/1.00038; 0.99895/1.00090; 1/1: pass | 0.99995/1.00036; 0.99990/1.00139; 1/1: pass | 1.00015/1.00040; 1.00036/1.00131; 1/1: pass |
+| **ecco**: 3 repeats | within the GPU floor (4e-11) | J bitwise; 1.3e-14 | J bitwise; 1.2e-14 | J bitwise; 1.8e-14 |
+| exact repeats (2) | recorded | J bitwise; full 5.0e-11, nodyn 4.6e-11 (theta0; others <= 1e-12) | nodyn 9.1e-11 | nodyn 1.2e-11 |
+| **ecco** TL vs adjoint | round-off | 0 / 1.3e-16 (named 4e-11 on a 1e-9 value) | 5.6e-16 / 2.8e-16 | 4.0e-16 / 8.1e-16 |
+| **sharded** (4 GH200, shard_map) vs 1 GPU | within the repeat floor | ecco 7 d: final State bitwise, gradient 1.1e-14 (floor 1.3e-14); exact_full 2 d: J bitwise, gradient 1.6e-11 (exact floor 5e-11) | - | - |
+| cost: warm gradient / plain forward; device peak; host | - | ecco 3.2 (138 s vs 43.8 s), nodyn 3.2, full 26.5 (1161 s); 44 / 47 / 52 GB; 15.5 GB | ecco 3.1 (274 s vs 87 s); 44 / 47 / 51 GB; 29 GB | ecco 3.2 (582 s vs 184 s), nodyn 3.2; 44 / 47 GB; 56 GB |
+
+**Verdict against the M1 bars.** Passed in every window and mode: forward identity of the modes, the TL/adjoint dot test
+(linear; beyond 1e-12 only where the two programs linearise slightly different sea-ice trajectories, finding 6), the
+amplification screen, the ecco repeats, and the sharded comparison. The FD plateau bar is passed by the ocean state and
+the wind stress in every window, by the Arctic ice-thickness footprint against exact_full (7, 14 d), and by the
+single-column air-temperature and ice-thickness directions at 7 days; it is **not** passed by air-temperature footprints
+(switch-limited: the error does not shrink with h) and, from 14 days on, by single sea-ice columns, whose FD differs
+from the implicit-LSR adjoint by a constant ~3e-3 at every h (28 d: ~6e-3 against exact_nodyn, which leaves out the
+dynamics derivative; exact_full was not run at 28 d). That offset is the production LSR tolerance: with the LSR
+converged to 1e-8 (same code path) the FD of heff_pt at 14 d agrees with the exact_full adjoint to 2.5e-4 / 3.0e-4
+(production forward 2.7e-3 / 2.8e-3), as docs/ADJOINT_MODES.md prescribes for FD checks of dynamics directions.
+
+## M2.3 Tables
+
+Generated by `python3 scripts/adjoint/fullgrad_summary.py <run dirs>` in `/work/ab0995/a270088/MIT/runs/adjoint_m2`
+(7 d: w07/{ecco,nodyn,full,fd,fd_pt,fd_parts,nodyn_ice0,full_ice0,p4_ecco}, 14 d: w14/..., 28 d: w28/...;
+--ref-mode exact_nodyn at 28 d). Every run: chunk 24 steps, stride 1, schedule step, sum_unroll 5, XLA default
+flags, GH200. The 14-day rows of job 27655089 (ecco r0, nodyn r0/r1, full r0) ran with the host memory of four
+processes on one NUMA node (docs/PORTING_LESSONS.md): their times are 4-12x too long; use the warm repeats.
+
+### Window 7 days
+
+#### FD h-sweep vs the exact_full adjoint, per named direction
+
+Relative error |FD - AD| / |AD| at each h, AD = the exact_full adjoint (r0, J = J_theta + J_ice); plateau = number of h with rel. error <= 0.001 (bar: >= 2 of 4); J_theta / J_ice parts: the same against the ice-weight-0 adjoint (J_theta) and the difference (J_ice), where both parts were recorded and the part carries >= 0.1 % of the derivative; the other modes' adjoints relative to the best FD value.
+
+| window | direction | AD exact_full | TL exact_full | FD rel. error at h = ... | plateau | J_theta part: errors, plateau | J_ice part: errors, plateau | other modes rel. to best FD | FD job |
+|---|---|---|---|---|---|---|---|---|---|
+| 7 d | atemp_arctic | -3.091089e-03 | - | 0.001: 1.5e-02; 0.0001: 3.4e-03; 1e-05: 3.5e-02; 1e-06: 1.3e-04 | 1/4 | not tested (3e-06 of AD) | 1.5e-02; 3.4e-03; 3.5e-02; 9.5e-05 (1/4) | exact_nodyn 1.8e-03; ecco 1.0e+00 | 27656226 |
+| 7 d | atemp_arctic_pt | -2.372898e-07 | - | 0.1: 4.1e-04; 0.01: 5.9e-04; 0.001: 3.5e-04; 0.0001: 4.7e-03 | 3/4 | not tested (2e-06 of AD) | 4.1e-04; 3.9e-04; 2.4e-04; 1.7e-03 (3/4) | exact_nodyn 3.4e-04; ecco 1.0e+00 | 27656226 |
+| 7 d | atemp_box | -4.449485e-05 | - | 0.1: 2.2e-03; 0.01: 2.0e-03; 0.001: 4.7e-03; 0.0001: 8.9e-03 | 0/4 | 2.2e-03; 2.0e-03; 4.7e-03; 8.9e-03 (0/4) | not tested (3e-05 of AD) | exact_nodyn 2.1e-03; ecco 4.9e-02 | 27656226 |
+| 7 d | atemp_pt | 5.265918e-08 | - | 1: 6.5e-03; 0.1: 6.0e-03; 0.01: 4.2e-04; 0.001: 1.5e-03 | 1/4 | 6.5e-03; 6.0e-03; 4.7e-04; 8.4e-04 (2/4) | not tested (-2e-05 of AD) | exact_nodyn 4.4e-04; ecco 8.7e-02 | 27656226 |
+| 7 d | heff_arctic | 1.002619e+00 | - | 0.01: 3.2e-04; 0.001: 1.7e-04; 0.0001: 2.4e-04; 1e-05: 7.8e-05 | 4/4 | not tested (2e-04 of AD) | 3.2e-04; 1.7e-04; 2.4e-04; 7.8e-05 (4/4) | exact_nodyn 2.3e-03; ecco 3.4e-02 | 27656226 |
+| 7 d | heff_pt | 1.644130e-04 | - | 0.1: 7.4e-04; 0.01: 6.3e-04; 0.001: 6.3e-04; 0.0001: 6.3e-04 | 4/4 | not tested (2e-04 of AD) | 7.4e-04; 6.3e-04; 6.3e-04; 6.3e-04 (4/4) | exact_nodyn 1.8e-03; ecco 1.3e-02 | 27656226 |
+| 7 d | kapGM_scale | 4.511588e-03 | - | 0.1: 6.5e-03; 0.01: 2.1e-02; 0.001: 2.6e-03; 0.0001: 2.8e-03 | 0/4 | 1.7e-05; 9.4e-06; 1.5e-04; 2.5e-04 (4/4) | 9.9e-03; 3.2e-02; 4.0e-03; 4.3e-03 (0/4) | exact_nodyn 2.2e-02; ecco 6.6e-01 | 27656226 |
+| 7 d | tauu_box | -2.952547e-01 | - | 0.01: 3.6e-05; 0.001: 1.7e-06; 0.0001: 2.1e-06; 1e-05: 9.9e-06 | 4/4 | - | - | exact_nodyn 1.9e-05; ecco 4.7e-03 | 27655028 |
+| 7 d | theta_A_centre | 2.335670e-04 | - | 0.1: 2.1e-05; 0.01: 2.0e-05; 0.001: 1.0e-06; 0.0001: 3.5e-06 | 4/4 | - | - | exact_nodyn 1.7e-06; ecco 1.4e-03 | 27655028 |
+| 7 d | theta_B_above | 3.511726e-05 | - | 0.1: 1.1e-04; 0.01: 7.9e-05; 0.001: 3.6e-06; 0.0001: 3.7e-06 | 4/4 | - | - | exact_nodyn 6.4e-06; ecco 6.3e-02 | 27655028 |
+| 7 d | theta_C_south | 4.431647e-06 | - | 0.1: 1.7e-04; 0.01: 1.8e-05; 0.001: 8.5e-05; 0.0001: 4.8e-04 | 4/4 | - | - | exact_nodyn 2.3e-06; ecco 6.5e-02 | 27655028 |
+
+Forward noise floor 7 d: spread 0.0e+00 (J = 13.75120067706965, 43.7 s per plain forward, job 27656226)
+
+#### FD h-sweep vs the exact_nodyn adjoint, per named direction
+
+Relative error |FD - AD| / |AD| at each h, AD = the exact_nodyn adjoint (r0, J = J_theta + J_ice); plateau = number of h with rel. error <= 0.001 (bar: >= 2 of 4); J_theta / J_ice parts: the same against the ice-weight-0 adjoint (J_theta) and the difference (J_ice), where both parts were recorded and the part carries >= 0.1 % of the derivative; the other modes' adjoints relative to the best FD value.
+
+| window | direction | AD exact_nodyn | TL exact_nodyn | FD rel. error at h = ... | plateau | J_theta part: errors, plateau | J_ice part: errors, plateau | other modes rel. to best FD | FD job |
+|---|---|---|---|---|---|---|---|---|---|
+| 7 d | atemp_arctic | -3.085197e-03 | -3.085197e-03 | 0.001: 1.3e-02; 0.0001: 1.5e-03; 1e-05: 3.3e-02; 1e-06: 1.8e-03 | 0/4 | not tested (4e-06 of AD) | 1.3e-02; 1.5e-03; 3.3e-02; 2.0e-03 (0/4) | exact_full 3.4e-03; ecco 1.0e+00 | 27656226 |
+| 7 d | atemp_arctic_pt | -2.374526e-07 | - | 0.1: 1.1e-03; 0.01: 1.3e-03; 0.001: 3.4e-04; 0.0001: 4.0e-03 | 1/4 | not tested (2e-06 of AD) | 1.1e-03; 1.1e-03; 9.2e-04; 2.3e-03 (1/4) | exact_full 3.5e-04; ecco 1.0e+00 | 27656226 |
+| 7 d | atemp_box | -4.449362e-05 | -4.449362e-05 | 0.1: 2.2e-03; 0.01: 2.1e-03; 0.001: 4.7e-03; 0.0001: 8.9e-03 | 0/4 | 2.2e-03; 2.0e-03; 4.7e-03; 8.9e-03 (0/4) | not tested (-7e-07 of AD) | exact_full 2.0e-03; ecco 4.9e-02 | 27656226 |
+| 7 d | atemp_pt | 5.266042e-08 | - | 1: 6.5e-03; 0.1: 6.0e-03; 0.01: 4.4e-04; 0.001: 1.5e-03 | 1/4 | 6.5e-03; 6.0e-03; 4.7e-04; 8.4e-04 (2/4) | not tested (6e-07 of AD) | exact_full 4.2e-04; ecco 8.7e-02 | 27656226 |
+| 7 d | heff_arctic | 1.004801e+00 | 1.004801e+00 | 0.01: 2.5e-03; 0.001: 2.3e-03; 0.0001: 2.4e-03; 1e-05: 2.2e-03 | 0/4 | not tested (2e-04 of AD) | 2.5e-03; 2.3e-03; 2.4e-03; 2.2e-03 (0/4) | exact_full 7.8e-05; ecco 3.4e-02 | 27656226 |
+| 7 d | heff_pt | 1.646113e-04 | - | 0.1: 1.9e-03; 0.01: 1.8e-03; 0.001: 1.8e-03; 0.0001: 1.8e-03 | 0/4 | not tested (2e-04 of AD) | 1.9e-03; 1.8e-03; 1.8e-03; 1.8e-03 (0/4) | exact_full 6.3e-04; ecco 1.3e-02 | 27656226 |
+| 7 d | kapGM_scale | 4.425845e-03 | 4.425845e-03 | 0.1: 1.3e-02; 0.01: 1.9e-03; 0.001: 2.2e-02; 0.0001: 2.2e-02 | 0/4 | 9.5e-06; 3.6e-05; 1.8e-04; 2.8e-04 (4/4) | 1.9e-02; 2.8e-03; 3.4e-02; 3.4e-02 (0/4) | exact_full 2.1e-02; ecco 6.5e-01 | 27656226 |
+| 7 d | tauu_box | -2.952598e-01 | -2.952598e-01 | 0.01: 1.9e-05; 0.001: 1.9e-05; 0.0001: 1.9e-05; 1e-05: 7.4e-06 | 4/4 | - | - | exact_full 9.9e-06; ecco 4.7e-03 | 27655028 |
+| 7 d | theta_A_centre | 2.335671e-04 | 2.335671e-04 | 0.1: 2.2e-05; 0.01: 1.9e-05; 0.001: 1.7e-06; 0.0001: 2.8e-06 | 4/4 | - | - | exact_full 1.0e-06; ecco 1.4e-03 | 27655028 |
+| 7 d | theta_B_above | 3.511736e-05 | 3.511736e-05 | 0.1: 1.1e-04; 0.01: 7.7e-05; 0.001: 6.4e-06; 0.0001: 8.8e-07 | 4/4 | - | - | exact_full 3.7e-06; ecco 6.3e-02 | 27655028 |
+| 7 d | theta_C_south | 4.431716e-06 | 4.431716e-06 | 0.1: 1.5e-04; 0.01: 2.3e-06; 0.001: 1.0e-04; 0.0001: 4.6e-04 | 4/4 | - | - | exact_full 1.8e-05; ecco 6.5e-02 | 27655028 |
+
+Forward noise floor 7 d: spread 0.0e+00 (J = 13.75120067706965, 43.7 s per plain forward, job 27656226)
+
+#### TL (jax.jvp) vs adjoint (chunked jax.vjp)
+
+| window | mode | combined amp 1 | combined amp 1e-6 | named directions: max rel. difference | job |
+|---|---|---|---|---|---|
+| 7 d | exact_full | 3.0e-13 | 3.0e-13 | - (0 dirs) | 27655028 |
+| 7 d | exact_nodyn | 3.9e-13 | 4.0e-13 | 2.1e-11 (8 dirs) | 27655028 |
+| 7 d | ecco | 0.0e+00 | 1.3e-16 | 4.2e-11 (8 dirs) | 27655028 |
+
+#### Amplification screen (terminal seed; per-chunk State-cotangent norm per field group)
+
+Groups: dynamic = every State field except the carried constants; prognostic = theta, salt, uVel, vVel, etaN; seaice = AREA, HEFF, HSNOW, TICES, UICE, VICE; seaice_thermo = without UICE, VICE. Statistics after the seed chunk (dynamic: also without the chunk ending at iteration 1).
+
+| window | mode | nproc | group | median /step | log-spread | worst-3 /step | passes | norm end -> start | job |
+|---|---|---|---|---|---|---|---|---|---|
+| 7 d | exact_full | 1 | dynamic | 0.99768 | 0.0041 | 0.99773 | yes | 6.880e+01 -> 1.289e+01 | 27655028 |
+| 7 d | exact_full | 1 | theta | 1.00007 | 0.0014 | 1.00041 | yes | 1.879e-02 -> 1.866e-02 | 27655028 |
+| 7 d | exact_full | 1 | prognostic | 0.99905 | 0.0041 | 1.00089 | yes | 5.834e-02 -> 5.484e-02 | 27655028 |
+| 7 d | exact_full | 1 | seaice | 1.00096 | 0.0032 | 1.00272 | yes | 1.256e-02 -> 1.623e-02 | 27655028 |
+| 7 d | exact_full | 1 | seaice_thermo | 1.00020 | 0.0005 | 1.00035 | yes | 1.253e-02 -> 1.248e-02 | 27655028 |
+| 7 d | exact_nodyn | 1 | dynamic | 0.99768 | 0.0041 | 0.99773 | yes | 6.880e+01 -> 1.289e+01 | 27655028 |
+| 7 d | exact_nodyn | 1 | theta | 1.00007 | 0.0014 | 1.00041 | yes | 1.879e-02 -> 1.866e-02 | 27655028 |
+| 7 d | exact_nodyn | 1 | prognostic | 0.99905 | 0.0041 | 1.00089 | yes | 5.834e-02 -> 5.484e-02 | 27655028 |
+| 7 d | exact_nodyn | 1 | seaice | 1.00632 | 0.0010 | 1.00697 | yes | 1.347e-02 -> 3.208e-02 | 27655028 |
+| 7 d | exact_nodyn | 1 | seaice_thermo | 1.00021 | 0.0006 | 1.00037 | yes | 1.253e-02 -> 1.247e-02 | 27655028 |
+| 7 d | ecco | 1 | dynamic | 0.99770 | 0.0040 | 0.99774 | yes | 6.896e+01 -> 1.262e+01 | 27655028 |
+| 7 d | ecco | 1 | theta | 0.99997 | 0.0015 | 1.00038 | yes | 1.882e-02 -> 1.862e-02 | 27655028 |
+| 7 d | ecco | 1 | prognostic | 0.99895 | 0.0042 | 1.00090 | yes | 5.899e-02 -> 5.592e-02 | 27655028 |
+| 7 d | ecco | 1 | seaice | 1.00000 | 0.0000 | 1.00000 | yes | 1.284e-02 -> 1.284e-02 | 27655028 |
+| 7 d | ecco | 1 | seaice_thermo | 1.00000 | 0.0000 | 1.00000 | yes | 1.284e-02 -> 1.284e-02 | 27655028 |
+
+#### Gradient runs: repeats, cost, memory
+
+| window | mode | nproc | repeat | J | max rel. diff to r0 (theta, kapGM, heff, atemp, tauu) | forward s | reverse s | rev/fwd | wall s | wall / plain forward | device peak GB | host GB | job |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 7 d | exact_full | 1 | 0 | 13.75120067706965 | - | 111 | 1283 | 11.52 | 1395 | 32.0 | 51.5 | 15.5 | 27655028 |
+| 7 d | exact_full | 1 | 1 | 13.75120067706965 | 5.0e-11, 1.1e-12, 8.8e-13, 8.7e-13, 6.7e-14 (J bitwise) | 47 | 1114 | 23.75 | 1161 | 26.6 | 51.7 | 15.5 | 27655028 |
+| 7 d | exact_full (ice weight 0) | 1 | 0 | 12.62649211901107 | - | 119 | 1269 | 10.65 | 1389 | 31.8 | 51.5 | 15.5 | 27656226 |
+| 7 d | exact_nodyn | 1 | 0 | 13.75120067706965 | - | 112 | 234 | 2.10 | 346 | 7.9 | 46.6 | 15.5 | 27655028 |
+| 7 d | exact_nodyn | 1 | 1 | 13.75120067706965 | 4.6e-11, 8.9e-13, 7.4e-13, 8.5e-13, 6.9e-15 (J bitwise) | 46 | 96 | 2.07 | 142 | 3.2 | 46.6 | 15.5 | 27655028 |
+| 7 d | exact_nodyn (ice weight 0) | 1 | 0 | 12.62649211901107 | - | 122 | 234 | 1.92 | 356 | 8.2 | 46.4 | 15.5 | 27656226 |
+| 7 d | ecco | 1 | 0 | 13.75120067706965 | - | 114 | 220 | 1.94 | 334 | 7.7 | 43.7 | 15.5 | 27655028 |
+| 7 d | ecco | 1 | 1 | 13.75120067706965 | 1.3e-14, 1.7e-15, 0.0e+00, 2.9e-15, 5.7e-16 (J bitwise) | 46 | 92 | 1.98 | 138 | 3.2 | 43.9 | 15.5 | 27655028 |
+| 7 d | ecco | 1 | 2 | 13.75120067706965 | 8.9e-15, 2.1e-15, 0.0e+00, 3.2e-15, 5.7e-16 (J bitwise) | 48 | 92 | 1.91 | 140 | 3.2 | 44.0 | 15.5 | 27655028 |
+| 7 d | ecco | 4 | 0 | 13.75120067706965 | - | 223 | 875 | 3.92 | 1100 | 25.2 | 20.8 | 19.1 | 27655183 |
+| 7 d | ecco | 4 | 1 | 13.75120067706965 | 1.2e-14, 1.9e-15, 0.0e+00, 2.9e-15, 5.7e-16 (J bitwise) | 52 | 100 | 1.92 | 152 | 3.5 | 21.0 | 19.1 | 27655183 |
+
+Directional derivatives per mode (r0) and relative difference to the first listed mode:
+
+| 7 d direction | exact_full | exact_nodyn | ecco |
+|---|---|---|---|
+| theta_A_centre | 2.335670e-04 | 2.335671e-04 (6.9e-07) | 2.338823e-04 (1.3e-03) |
+| theta_B_above | 3.511726e-05 | 3.511736e-05 (2.9e-06) | 3.734211e-05 (6.3e-02) |
+| theta_C_south | 4.431647e-06 | 4.431716e-06 (1.5e-05) | 4.719323e-06 (6.5e-02) |
+| kapGM_scale | 4.511588e-03 | 4.425845e-03 (1.9e-02) | 1.530434e-03 (6.6e-01) |
+| atemp_box | -4.449485e-05 | -4.449362e-05 (2.7e-05) | -4.241219e-05 (4.7e-02) |
+| tauu_box | -2.952547e-01 | -2.952598e-01 (1.7e-05) | -2.966379e-01 (4.7e-03) |
+| atemp_arctic | -3.091089e-03 | -3.085197e-03 (1.9e-03) | 1.497881e-09 (1.0e+00) |
+| heff_arctic | 1.002619e+00 | 1.004801e+00 (2.2e-03) | 1.036965e+00 (3.4e-02) |
+
+#### Forward values per mode (chunked forward, whole window, every State field + both cost parts, bytes)
+
+| window | nproc | mode vs ref | bitwise | fields differing | J_theta | J_ice | job |
+|---|---|---|---|---|---|---|---|
+| 7 d | 1 | exact_full vs ecco | yes | - (126 fields) | 12.62649211901107 | 1.124708558058582 | 27655028 |
+| 7 d | 1 | exact_nodyn vs ecco | yes | - (126 fields) | 12.62649211901107 | 1.124708558058582 | 27655028 |
+
+#### Sharded (P GPUs, shard_map) vs 1 GPU
+
+| sharded run | 1-GPU run | file | J sharded | J 1 GPU | rel. diff per control (max |a-b| / max |b|) | 1-GPU repeat floor (r1 vs r0) |
+|---|---|---|---|---|---|---|
+| w07/p4_ecco | w07/ecco | grad_ecco_7d_r0.npz | 13.75120067706965 | 13.75120067706965 | aqh 3.0e-15, atemp 3.4e-15, heff 0.0e+00, kapGM 1.9e-15, lwdown 3.5e-15, precip 1.5e-15, swdown 3.1e-15, tauu 5.7e-16, tauv 3.9e-16, theta 1.1e-14 | aqh 2.7e-15, atemp 2.9e-15, heff 0.0e+00, kapGM 1.7e-15, lwdown 2.4e-15, precip 1.4e-15, swdown 2.3e-15, tauu 5.7e-16, tauv 4.5e-16, theta 1.3e-14 |
+| smoke_gh200_2d/p4_full | smoke_gh200_2d/full | grad_exact_full_2d_r0.npz | 13.69685064504429 | 13.69685064504429 | aqh 6.7e-13, atemp 4.5e-13, heff 2.7e-13, kapGM 8.6e-13, lwdown 1.1e-12, precip 6.1e-13, swdown 4.2e-13, tauu 1.2e-14, tauv 8.0e-15, theta 1.6e-11 | - |
+
+Forward (final State of the chunked forward, whole window): sharded vs 1 GPU
+
+| sharded run | 1-GPU run | file | J_theta, J_ice sharded | 1 GPU | fields differing (points) | max rel. diff |
+|---|---|---|---|---|---|---|
+| w07/p4_ecco | w07/ecco | fwd_final_ecco_7d.npz | (12.626492119011068, 1.1247085580585814) | (12.62649211901107, 1.1247085580585816) | none (bitwise) | 0.0e+00 |
+
+
+### Window 14 days
+
+#### FD h-sweep vs the exact_full adjoint, per named direction
+
+Relative error |FD - AD| / |AD| at each h, AD = the exact_full adjoint (r0, J = J_theta + J_ice); plateau = number of h with rel. error <= 0.001 (bar: >= 2 of 4); J_theta / J_ice parts: the same against the ice-weight-0 adjoint (J_theta) and the difference (J_ice), where both parts were recorded and the part carries >= 0.1 % of the derivative; the other modes' adjoints relative to the best FD value.
+
+| window | direction | AD exact_full | TL exact_full | FD rel. error at h = ... | plateau | J_theta part: errors, plateau | J_ice part: errors, plateau | other modes rel. to best FD | FD job |
+|---|---|---|---|---|---|---|---|---|---|
+| 14 d | atemp_arctic | -4.679761e-03 | - | 0.001: 2.2e-02; 0.0001: 6.1e-03; 1e-05: 5.9e-02; 1e-06: 3.8e-04 | 1/4 | not tested (1e-05 of AD) | 2.2e-02; 6.1e-03; 5.9e-02; 1.5e-04 (1/4) | exact_nodyn 1.2e-03; ecco 1.0e+00 | 27656226 |
+| 14 d | atemp_arctic_pt | -5.562216e-07 | - | 0.1: 2.9e-03; 0.01: 2.8e-03; 0.001: 3.7e-03; 0.0001: 4.2e-03 | 0/4 | not tested (5e-06 of AD) | 2.9e-03; 3.1e-03; 3.2e-03; 3.6e-03 (0/4) | exact_nodyn 1.5e-03; ecco 1.0e+00 | 27656226 |
+| 14 d | atemp_box | -1.082606e-04 | - | 0.1: 1.3e-03; 0.01: 1.7e-03; 0.001: 3.0e-04; 0.0001: 3.7e-03 | 1/4 | 1.3e-03; 1.7e-03; 3.0e-04; 3.7e-03 (1/4) | not tested (9e-05 of AD) | exact_nodyn 3.9e-04; ecco 7.2e-03 | 27656226 |
+| 14 d | atemp_pt | 1.046371e-07 | - | 1: 4.4e-03; 0.1: 3.1e-03; 0.01: 4.9e-04; 0.001: 5.8e-03 | 1/4 | 4.4e-03; 3.1e-03; 6.2e-04; 5.9e-03 (1/4) | not tested (-2e-04 of AD) | exact_nodyn 6.6e-04; ecco 8.2e-02 | 27656226 |
+| 14 d | heff_arctic | 9.744604e-01 | - | 0.01: 3.1e-04; 0.001: 1.4e-04; 0.0001: 2.9e-04; 1e-05: 1.2e-04 | 4/4 | not tested (3e-04 of AD) | 3.1e-04; 1.4e-04; 2.9e-04; 1.2e-04 (4/4) | exact_nodyn 3.3e-03; ecco 6.4e-02 | 27656226 |
+| 14 d | heff_pt | 1.625654e-04 | - | 0.1: 5.5e-04; 0.01: 2.6e-03; 0.001: 2.7e-03; 0.0001: 2.8e-03 | 1/4 | not tested (3e-04 of AD) | 5.5e-04; 2.6e-03; 2.7e-03; 2.7e-03 (1/4) | exact_nodyn 3.0e-03; ecco 2.4e-02 | 27656226 |
+| 14 d | kapGM_scale | 1.019112e-02 | - | 0.1: 2.1e-02; 0.01: 3.4e-02; 0.001: 4.4e-03; 0.0001: 6.2e-02 | 0/4 | 3.7e-05; 4.0e-05; 5.8e-05; 3.4e-04 (4/4) | 3.1e-02; 4.9e-02; 6.3e-03; 8.9e-02 (0/4) | exact_nodyn 1.4e-02; ecco 6.9e-01 | 27656226 |
+| 14 d | tauu_box | -6.169303e-01 | - | 0.01: 4.6e-06; 0.001: 4.2e-06; 0.0001: 4.2e-06; 1e-05: 4.0e-06 | 4/4 | - | - | exact_nodyn 6.3e-06; ecco 9.7e-03 | 27655089 |
+| 14 d | theta_A_centre | 2.352730e-04 | - | 0.1: 1.1e-06; 0.01: 2.1e-05; 0.001: 1.2e-07; 0.0001: 1.9e-05 | 4/4 | - | - | exact_nodyn 1.0e-06; ecco 4.7e-04 | 27655089 |
+| 14 d | theta_B_above | 3.884180e-05 | - | 0.1: 1.1e-04; 0.01: 7.6e-05; 0.001: 3.7e-06; 0.0001: 6.9e-05 | 4/4 | - | - | exact_nodyn 7.0e-06; ecco 9.8e-02 | 27655089 |
+| 14 d | theta_C_south | 4.578031e-06 | - | 0.1: 2.2e-04; 0.01: 3.4e-05; 0.001: 2.0e-04; 0.0001: 8.5e-04 | 4/4 | - | - | exact_nodyn 1.0e-05; ecco 1.4e-01 | 27655089 |
+
+Forward noise floor 14 d: spread 0.0e+00 (J = 13.81665089194191, 87.2 s per plain forward, job 27656226)
+
+#### FD from paired single evaluations (fdeval; LSR settings per row) vs the exact_full adjoint
+
+| window | direction | LSR_ERROR / max iter | h | FD | FD J_ice part | AD | rel. error | J_ice part rel. error | jobs |
+|---|---|---|---|---|---|---|---|---|---|
+| 14 d | heff_pt | 1e-08 / 20000 | 0.001 | 1.626146e-04 | 1.625709e-04 | 1.625654e-04 | 3.0e-04 | 3.0e-04 | 27659200,27659200 |
+| 14 d | heff_pt | 1e-08 / 20000 | 0.01 | 1.626067e-04 | 1.625633e-04 | 1.625654e-04 | 2.5e-04 | 2.5e-04 | 27659200,27659200 |
+
+#### FD h-sweep vs the exact_nodyn adjoint, per named direction
+
+Relative error |FD - AD| / |AD| at each h, AD = the exact_nodyn adjoint (r0, J = J_theta + J_ice); plateau = number of h with rel. error <= 0.001 (bar: >= 2 of 4); J_theta / J_ice parts: the same against the ice-weight-0 adjoint (J_theta) and the difference (J_ice), where both parts were recorded and the part carries >= 0.1 % of the derivative; the other modes' adjoints relative to the best FD value.
+
+| window | direction | AD exact_nodyn | TL exact_nodyn | FD rel. error at h = ... | plateau | J_theta part: errors, plateau | J_ice part: errors, plateau | other modes rel. to best FD | FD job |
+|---|---|---|---|---|---|---|---|---|---|
+| 14 d | atemp_arctic | -4.672233e-03 | -4.672233e-03 | 0.001: 2.1e-02; 0.0001: 4.5e-03; 1e-05: 5.7e-02; 1e-06: 1.2e-03 | 0/4 | not tested (1e-05 of AD) | 2.1e-02; 4.5e-03; 5.7e-02; 1.5e-03 (0/4) | exact_full 3.8e-04; ecco 1.0e+00 | 27656226 |
+| 14 d | atemp_arctic_pt | -5.569837e-07 | -5.569837e-07 | 0.1: 1.6e-03; 0.01: 1.5e-03; 0.001: 2.3e-03; 0.0001: 5.5e-03 | 0/4 | not tested (5e-06 of AD) | 1.6e-03; 1.8e-03; 1.8e-03; 2.2e-03 (0/4) | exact_full 2.8e-03; ecco 1.0e+00 | 27656226 |
+| 14 d | atemp_box | -1.082502e-04 | -1.082502e-04 | 0.1: 1.4e-03; 0.01: 1.8e-03; 0.001: 3.9e-04; 0.0001: 3.8e-03 | 1/4 | 1.3e-03; 1.7e-03; 3.0e-04; 3.7e-03 (1/4) | not tested (-5e-06 of AD) | exact_full 3.0e-04; ecco 7.2e-03 | 27656226 |
+| 14 d | atemp_pt | 1.046550e-07 | 1.046550e-07 | 1: 4.2e-03; 0.1: 3.2e-03; 0.01: 6.6e-04; 0.001: 5.7e-03 | 1/4 | 4.4e-03; 3.1e-03; 6.2e-04; 5.9e-03 (1/4) | not tested (8e-06 of AD) | exact_full 4.9e-04; ecco 8.2e-02 | 27656226 |
+| 14 d | heff_arctic | 9.776011e-01 | 9.776011e-01 | 0.01: 3.5e-03; 0.001: 3.4e-03; 0.0001: 3.5e-03; 1e-05: 3.3e-03 | 0/4 | not tested (3e-04 of AD) | 3.5e-03; 3.3e-03; 3.5e-03; 3.3e-03 (0/4) | exact_full 1.2e-04; ecco 6.4e-02 | 27656226 |
+| 14 d | heff_pt | 1.631405e-04 | 1.631405e-04 | 0.1: 3.0e-03; 0.01: 9.1e-04; 0.001: 8.0e-04; 0.0001: 7.7e-04 | 3/4 | not tested (3e-04 of AD) | 3.0e-03; 9.1e-04; 8.1e-04; 8.2e-04 (3/4) | exact_full 2.8e-03; ecco 2.1e-02 | 27656226 |
+| 14 d | kapGM_scale | 1.000157e-02 | 1.000157e-02 | 0.1: 2.8e-03; 0.01: 1.5e-02; 0.001: 1.4e-02; 0.0001: 4.4e-02 | 0/4 | 4.3e-05; 4.6e-05; 6.3e-05; 3.4e-04 (4/4) | 4.0e-03; 2.3e-02; 2.1e-02; 6.4e-02 (0/4) | exact_full 2.2e-02; ecco 6.9e-01 | 27656226 |
+| 14 d | tauu_box | -6.169367e-01 | -6.169367e-01 | 0.01: 5.8e-06; 0.001: 1.5e-05; 0.0001: 1.5e-05; 1e-05: 6.3e-06 | 4/4 | - | - | exact_full 4.6e-06; ecco 9.7e-03 | 27655089 |
+| 14 d | theta_A_centre | 2.352732e-04 | 2.352732e-04 | 0.1: 2.0e-06; 0.01: 2.0e-05; 0.001: 1.0e-06; 0.0001: 2.0e-05 | 4/4 | - | - | exact_full 1.2e-07; ecco 4.7e-04 | 27655089 |
+| 14 d | theta_B_above | 3.884193e-05 | 3.884193e-05 | 0.1: 1.1e-04; 0.01: 7.2e-05; 0.001: 7.0e-06; 0.0001: 7.2e-05 | 4/4 | - | - | exact_full 3.7e-06; ecco 9.8e-02 | 27655089 |
+| 14 d | theta_C_south | 4.578141e-06 | 4.578141e-06 | 0.1: 2.0e-04; 0.01: 1.0e-05; 0.001: 2.2e-04; 0.0001: 8.2e-04 | 4/4 | - | - | exact_full 3.4e-05; ecco 1.4e-01 | 27655089 |
+
+Forward noise floor 14 d: spread 0.0e+00 (J = 13.81665089194191, 87.2 s per plain forward, job 27656226)
+
+#### TL (jax.jvp) vs adjoint (chunked jax.vjp)
+
+| window | mode | combined amp 1 | combined amp 1e-6 | named directions: max rel. difference | job |
+|---|---|---|---|---|---|
+| 14 d | exact_full | 1.1e-11 | 1.1e-11 | - (0 dirs) | 27655089 |
+| 14 d | exact_nodyn | 9.1e-12 | 9.1e-12 | 4.7e-10 (11 dirs) | 27655089 |
+| 14 d | ecco | 5.6e-16 | 2.8e-16 | 4.5e-11 (11 dirs) | 27655089 |
+
+#### Amplification screen (terminal seed; per-chunk State-cotangent norm per field group)
+
+Groups: dynamic = every State field except the carried constants; prognostic = theta, salt, uVel, vVel, etaN; seaice = AREA, HEFF, HSNOW, TICES, UICE, VICE; seaice_thermo = without UICE, VICE. Statistics after the seed chunk (dynamic: also without the chunk ending at iteration 1).
+
+| window | mode | nproc | group | median /step | log-spread | worst-3 /step | passes | norm end -> start | job |
+|---|---|---|---|---|---|---|---|---|---|
+| 14 d | exact_full | 1 | dynamic | 0.99763 | 0.0029 | 0.99973 | yes | 6.846e+01 -> 9.907e+00 | 27655089 |
+| 14 d | exact_full | 1 | theta | 1.00004 | 0.0011 | 1.00040 | yes | 1.879e-02 -> 1.894e-02 | 27655089 |
+| 14 d | exact_full | 1 | prognostic | 1.00011 | 0.0032 | 1.00132 | yes | 5.809e-02 -> 5.794e-02 | 27655089 |
+| 14 d | exact_full | 1 | seaice | 1.00045 | 0.0039 | 1.00360 | yes | 1.299e-02 -> 1.890e-02 | 27655089 |
+| 14 d | exact_full | 1 | seaice_thermo | 1.00068 | 0.0006 | 1.00089 | yes | 1.241e-02 -> 1.385e-02 | 27655089 |
+| 14 d | exact_nodyn | 1 | dynamic | 0.99763 | 0.0029 | 0.99973 | yes | 6.846e+01 -> 9.912e+00 | 27655089 |
+| 14 d | exact_nodyn | 1 | theta | 1.00004 | 0.0011 | 1.00040 | yes | 1.879e-02 -> 1.894e-02 | 27655089 |
+| 14 d | exact_nodyn | 1 | prognostic | 1.00011 | 0.0032 | 1.00132 | yes | 5.809e-02 -> 5.794e-02 | 27655089 |
+| 14 d | exact_nodyn | 1 | seaice | 1.00425 | 0.0021 | 1.00800 | yes | 1.356e-02 -> 6.098e-02 | 27655089 |
+| 14 d | exact_nodyn | 1 | seaice_thermo | 1.00068 | 0.0007 | 1.00090 | yes | 1.241e-02 -> 1.383e-02 | 27655089 |
+| 14 d | ecco | 1 | dynamic | 0.99760 | 0.0028 | 0.99972 | yes | 6.860e+01 -> 9.273e+00 | 27655089 |
+| 14 d | ecco | 1 | theta | 0.99995 | 0.0011 | 1.00036 | yes | 1.882e-02 -> 1.889e-02 | 27655089 |
+| 14 d | ecco | 1 | prognostic | 0.99990 | 0.0033 | 1.00139 | yes | 5.867e-02 -> 5.926e-02 | 27655089 |
+| 14 d | ecco | 1 | seaice | 1.00000 | 0.0000 | 1.00000 | yes | 1.284e-02 -> 1.284e-02 | 27655089 |
+| 14 d | ecco | 1 | seaice_thermo | 1.00000 | 0.0000 | 1.00000 | yes | 1.284e-02 -> 1.284e-02 | 27655089 |
+
+#### Gradient runs: repeats, cost, memory
+
+| window | mode | nproc | repeat | J | max rel. diff to r0 (theta, kapGM, heff, atemp, tauu) | forward s | reverse s | rev/fwd | wall s | wall / plain forward | device peak GB | host GB | job |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 14 d | exact_full | 1 | 0 | 13.81665089194191 | - | 155 | 5559 | 35.76 | 5715 | 65.6 | 51.3 | 29.1 | 27655089 |
+| 14 d | exact_full (ice weight 0) | 1 | 0 | 12.61951490289781 | - | 149 | 2379 | 15.97 | 2529 | 29.0 | 51.5 | 29.1 | 27656226 |
+| 14 d | exact_nodyn | 1 | 0 | 13.81665089194191 | - | 156 | 1603 | 10.27 | 1760 | 20.2 | 46.4 | 29.1 | 27655089 |
+| 14 d | exact_nodyn | 1 | 1 | 13.81665089194191 | 9.1e-11, 7.6e-13, 2.6e-12, 2.6e-12, 4.7e-15 (J bitwise) | 96 | 481 | 5.02 | 577 | 6.6 | 46.6 | 29.1 | 27655089 |
+| 14 d | exact_nodyn (ice weight 0) | 1 | 0 | 12.61951490289781 | - | 152 | 324 | 2.13 | 477 | 5.5 | 46.5 | 29.1 | 27656226 |
+| 14 d | ecco | 1 | 0 | 13.81665089194191 | - | 580 | 3573 | 6.16 | 4154 | 47.7 | 43.8 | 29.1 | 27655089 |
+| 14 d | ecco | 1 | 1 | 13.81665089194191 | 1.2e-14, 1.9e-15, 0.0e+00, 2.2e-15, 6.2e-16 (J bitwise) | 91 | 183 | 2.00 | 274 | 3.1 | 43.9 | 29.1 | 27655089 |
+| 14 d | ecco | 1 | 2 | 13.81665089194191 | 1.1e-14, 2.2e-15, 0.0e+00, 2.2e-15, 6.2e-16 (J bitwise) | 94 | 183 | 1.96 | 277 | 3.2 | 44.0 | 29.1 | 27655089 |
+
+Directional derivatives per mode (r0) and relative difference to the first listed mode:
+
+| 14 d direction | exact_full | exact_nodyn | ecco |
+|---|---|---|---|
+| theta_A_centre | 2.352730e-04 | 2.352732e-04 (8.7e-07) | 2.351627e-04 (4.7e-04) |
+| theta_B_above | 3.884180e-05 | 3.884193e-05 (3.3e-06) | 4.264457e-05 (9.8e-02) |
+| theta_C_south | 4.578031e-06 | 4.578141e-06 (2.4e-05) | 5.234808e-06 (1.4e-01) |
+| kapGM_scale | 1.019112e-02 | 1.000157e-02 (1.9e-02) | 3.138162e-03 (6.9e-01) |
+| atemp_box | -1.082606e-04 | -1.082502e-04 (9.7e-05) | -1.090766e-04 (7.5e-03) |
+| tauu_box | -6.169303e-01 | -6.169367e-01 (1.0e-05) | -6.229115e-01 (9.7e-03) |
+| atemp_arctic | -4.679761e-03 | -4.672233e-03 (1.6e-03) | -4.515098e-10 (1.0e+00) |
+| heff_arctic | 9.744604e-01 | 9.776011e-01 (3.2e-03) | 1.036965e+00 (6.4e-02) |
+
+#### Forward values per mode (chunked forward, whole window, every State field + both cost parts, bytes)
+
+| window | nproc | mode vs ref | bitwise | fields differing | J_theta | J_ice | job |
+|---|---|---|---|---|---|---|---|
+| 14 d | 1 | exact_full vs ecco | yes | - (126 fields) | 12.61951490289781 | 1.197135989044098 | 27655089 |
+| 14 d | 1 | exact_nodyn vs ecco | yes | - (126 fields) | 12.61951490289781 | 1.197135989044098 | 27655089 |
+
+
+### Window 28 days
+
+#### FD h-sweep vs the exact_nodyn adjoint, per named direction
+
+Relative error |FD - AD| / |AD| at each h, AD = the exact_nodyn adjoint (r0, J = J_theta + J_ice); plateau = number of h with rel. error <= 0.001 (bar: >= 2 of 4); J_theta / J_ice parts: the same against the ice-weight-0 adjoint (J_theta) and the difference (J_ice), where both parts were recorded and the part carries >= 0.1 % of the derivative; the other modes' adjoints relative to the best FD value.
+
+| window | direction | AD exact_nodyn | TL exact_nodyn | FD rel. error at h = ... | plateau | J_theta part: errors, plateau | J_ice part: errors, plateau | other modes rel. to best FD | FD job |
+|---|---|---|---|---|---|---|---|---|---|
+| 28 d | atemp_arctic | -7.978181e-03 | -7.978181e-03 | 0.001: 6.8e-03; 0.0001: 2.4e-02; 1e-05: 3.0e-02; 1e-06: 1.5e-03 | 0/4 | not tested (2e-05 of AD) | 6.8e-03; 2.4e-02; 3.0e-02; 1.8e-03 (0/4) | ecco 1.0e+00 | 27655182 |
+| 28 d | atemp_arctic_pt | -1.121796e-06 | -1.121796e-06 | 0.1: 1.4e-03; 0.01: 1.2e-03; 0.001: 3.6e-04; 0.0001: 3.7e-03 | 1/4 | not tested (1e-05 of AD) | 1.4e-03; 1.1e-03; 1.1e-03; 3.1e-03 (0/4) | ecco 1.0e+00 | 27658145 |
+| 28 d | atemp_box | -2.484157e-04 | -2.484157e-04 | 0.1: 5.4e-04; 0.01: 1.9e-04; 0.001: 3.1e-03; 0.0001: 1.7e-03 | 2/4 | 6.6e-04; 7.0e-05; 3.2e-03; 1.8e-03 (2/4) | not tested (-3e-05 of AD) | ecco 1.1e-02 | 27655182 |
+| 28 d | atemp_pt | 1.757180e-07 | 1.757180e-07 | 1: 2.4e-02; 0.1: 3.8e-03; 0.01: 4.5e-03; 0.001: 4.9e-02 | 0/4 | 2.4e-02; 3.6e-03; 4.5e-03; 4.9e-02 (0/4) | not tested (6e-05 of AD) | ecco 9.1e-02 | 27658145 |
+| 28 d | heff_arctic | 9.400911e-01 | 9.400911e-01 | 0.01: 5.6e-03; 0.001: 5.5e-03; 0.0001: 5.8e-03; 1e-05: 5.5e-03 | 0/4 | not tested (3e-04 of AD) | 5.6e-03; 5.5e-03; 5.8e-03; 5.4e-03 (0/4) | ecco 1.1e-01 | 27655182 |
+| 28 d | heff_pt | 1.603494e-04 | 1.603494e-04 | 0.1: 6.9e-03; 0.01: 5.7e-03; 0.001: 5.6e-03; 0.0001: 5.6e-03 | 0/4 | not tested (3e-04 of AD) | 6.9e-03; 5.7e-03; 5.6e-03; 5.7e-03 (0/4) | ecco 4.4e-02 | 27658145 |
+| 28 d | kapGM_scale | 2.175598e-02 | 2.175598e-02 | 0.1: 4.3e-03; 0.01: 2.1e-02; 0.001: 1.8e-02; 0.0001: 1.6e-02 | 0/4 | 8.9e-05; 2.5e-05; 1.1e-04; 4.9e-05 (4/4) | 6.0e-03; 2.9e-02; 2.5e-02; 2.2e-02 (0/4) | ecco 7.2e-01 | 27655182 |
+| 28 d | tauu_box | -1.269547e+00 | -1.269547e+00 | 0.01: 8.5e-05; 0.001: 1.3e-06; 0.0001: 1.7e-05; 1e-05: 1.7e-06 | 4/4 | 8.9e-05; 2.6e-06; 1.4e-05; 2.2e-06 (4/4) | not tested (4e-07 of AD) | ecco 1.7e-02 | 27655182 |
+| 28 d | theta_A_centre | 2.383939e-04 | 2.383939e-04 | 0.1: 4.4e-05; 0.01: 2.2e-05; 0.001: 3.9e-06; 0.0001: 1.8e-05 | 4/4 | 4.5e-05; 2.3e-05; 3.6e-06; 2.5e-05 (4/4) | not tested (3e-07 of AD) | ecco 4.9e-03 | 27655182 |
+| 28 d | theta_B_above | 4.790035e-05 | 4.790035e-05 | 0.1: 9.6e-05; 0.01: 6.1e-05; 0.001: 1.0e-05; 0.0001: 7.7e-05 | 4/4 | 9.9e-05; 6.4e-05; 7.8e-06; 1.2e-04 (4/4) | not tested (1e-06 of AD) | ecco 1.1e-01 | 27655182 |
+| 28 d | theta_C_south | 5.749487e-06 | 5.749487e-06 | 0.1: 2.1e-04; 0.01: 3.4e-04; 0.001: 3.4e-04; 0.0001: 5.2e-04 | 4/4 | 2.3e-04; 3.3e-04; 3.3e-04; 5.7e-04 (4/4) | not tested (3e-06 of AD) | ecco 2.5e-01 | 27655182 |
+
+Forward noise floor 28 d: spread 0.0e+00 (J = 13.93963468820163, 183.4 s per plain forward, job 27658145)
+
+#### TL (jax.jvp) vs adjoint (chunked jax.vjp)
+
+| window | mode | combined amp 1 | combined amp 1e-6 | named directions: max rel. difference | job |
+|---|---|---|---|---|---|
+| 28 d | exact_nodyn | 3.4e-12 | 3.4e-12 | 2.6e-10 (11 dirs) | 27655182 |
+| 28 d | ecco | 4.0e-16 | 8.1e-16 | 9.6e-12 (11 dirs) | 27655182 |
+
+#### Amplification screen (terminal seed; per-chunk State-cotangent norm per field group)
+
+Groups: dynamic = every State field except the carried constants; prognostic = theta, salt, uVel, vVel, etaN; seaice = AREA, HEFF, HSNOW, TICES, UICE, VICE; seaice_thermo = without UICE, VICE. Statistics after the seed chunk (dynamic: also without the chunk ending at iteration 1).
+
+| window | mode | nproc | group | median /step | log-spread | worst-3 /step | passes | norm end -> start | job |
+|---|---|---|---|---|---|---|---|---|---|
+| 28 d | exact_nodyn | 1 | dynamic | 0.99892 | 0.0022 | 1.00061 | yes | 7.024e+01 -> 8.775e+00 | 27655182 |
+| 28 d | exact_nodyn | 1 | theta | 1.00010 | 0.0007 | 1.00041 | yes | 1.897e-02 -> 2.016e-02 | 27655182 |
+| 28 d | exact_nodyn | 1 | prognostic | 1.00034 | 0.0021 | 1.00123 | yes | 6.016e-02 -> 6.960e-02 | 27655182 |
+| 28 d | exact_nodyn | 1 | seaice | 1.00218 | 0.0027 | 1.00953 | yes | 1.408e-02 -> 1.230e-01 | 27655182 |
+| 28 d | exact_nodyn | 1 | seaice_thermo | 1.00030 | 0.0004 | 1.00090 | yes | 1.246e-02 -> 1.508e-02 | 27655182 |
+| 28 d | ecco | 1 | dynamic | 0.99890 | 0.0021 | 1.00060 | yes | 7.042e+01 -> 8.125e+00 | 27655182 |
+| 28 d | ecco | 1 | theta | 1.00015 | 0.0008 | 1.00040 | yes | 1.902e-02 -> 2.011e-02 | 27655182 |
+| 28 d | ecco | 1 | prognostic | 1.00036 | 0.0022 | 1.00131 | yes | 6.090e-02 -> 7.139e-02 | 27655182 |
+| 28 d | ecco | 1 | seaice | 1.00000 | 0.0000 | 1.00000 | yes | 1.284e-02 -> 1.284e-02 | 27655182 |
+| 28 d | ecco | 1 | seaice_thermo | 1.00000 | 0.0000 | 1.00000 | yes | 1.284e-02 -> 1.284e-02 | 27655182 |
+
+#### Gradient runs: repeats, cost, memory
+
+| window | mode | nproc | repeat | J | max rel. diff to r0 (theta, kapGM, heff, atemp, tauu) | forward s | reverse s | rev/fwd | wall s | wall / plain forward | device peak GB | host GB | job |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 28 d | exact_nodyn | 1 | 0 | 13.93963468820163 | - | 268 | 530 | 1.98 | 799 | 4.4 | 46.5 | 56.3 | 27655182 |
+| 28 d | exact_nodyn | 1 | 1 | 13.93963468820163 | 1.2e-11, 3.8e-13, 2.8e-12, 1.9e-12, 4.1e-15 (J bitwise) | 191 | 400 | 2.09 | 592 | 3.2 | 46.7 | 56.3 | 27655182 |
+| 28 d | exact_nodyn (ice weight 0) | 1 | 0 | 12.62591698667399 | - | 266 | 530 | 1.99 | 796 | 4.3 | 46.6 | 56.3 | 27658145 |
+| 28 d | ecco | 1 | 0 | 13.93963468820163 | - | 262 | 514 | 1.96 | 778 | 4.2 | 43.7 | 56.3 | 27655182 |
+| 28 d | ecco | 1 | 1 | 13.93963468820163 | 1.8e-14, 2.1e-15, 0.0e+00, 1.6e-15, 5.9e-16 (J bitwise) | 194 | 388 | 2.00 | 582 | 3.2 | 43.9 | 56.3 | 27655182 |
+| 28 d | ecco | 1 | 2 | 13.93963468820163 | 1.7e-14, 2.5e-15, 0.0e+00, 1.2e-15, 5.9e-16 (J bitwise) | 194 | 388 | 2.00 | 582 | 3.2 | 43.9 | 56.3 | 27655182 |
+
+Directional derivatives per mode (r0) and relative difference to the first listed mode:
+
+| 28 d direction | exact_nodyn | ecco |
+|---|---|---|
+| theta_A_centre | 2.383939e-04 | 2.372204e-04 (4.9e-03) |
+| theta_B_above | 4.790035e-05 | 5.311789e-05 (1.1e-01) |
+| theta_C_south | 5.749487e-06 | 7.206581e-06 (2.5e-01) |
+| kapGM_scale | 2.175598e-02 | 6.191542e-03 (7.2e-01) |
+| atemp_box | -2.484157e-04 | -2.511035e-04 (1.1e-02) |
+| tauu_box | -1.269547e+00 | -1.290846e+00 (1.7e-02) |
+| atemp_arctic | -7.978181e-03 | -4.315871e-08 (1.0e+00) |
+| heff_arctic | 9.400911e-01 | 1.036965e+00 (1.0e-01) |
+| atemp_pt | 1.757180e-07 | 1.909359e-07 (8.7e-02) |
+| atemp_arctic_pt | -1.121796e-06 | -6.701891e-12 (1.0e+00) |
+| heff_pt | 1.603494e-04 | 1.664900e-04 (3.8e-02) |
+
+#### Forward values per mode (chunked forward, whole window, every State field + both cost parts, bytes)
+
+| window | nproc | mode vs ref | bitwise | fields differing | J_theta | J_ice | job |
+|---|---|---|---|---|---|---|---|
+| 28 d | 1 | exact_full vs ecco | yes | - (126 fields) | 12.62591698667399 | 1.313717701527636 | 27655182 |
+| 28 d | 1 | exact_nodyn vs ecco | yes | - (126 fields) | 12.62591698667399 | 1.313717701527636 | 27655182 |
+
+
+
+## M2.4 Figures
+
+In `/work/ab0995/a270088/MIT/runs/adjoint_m2/figures/` (not in the repository), `<mode>` = ecco | exact_nodyn |
+exact_full, `<w>` = 7d | 14d (all modes), 28d (ecco, exact_nodyn); J is in "K or m" (J_theta + J_ice):
+
+| file | content |
+|---|---|
+| `dJdatemp_<mode>_<w>_arctic.png` | **sea-ice cost sensitivity**: dJ/d atemp (time-constant) north of 62N; ecco: 0 (no sea-ice adjoint) |
+| `dJdheff_<mode>_<w>_arctic.png` | dJ/d ln HEFF0 (per cell): the Arctic ice-thickness sensitivity |
+| `dJd{tauu,tauv,swdown,lwdown}_<mode>_<w>_arctic.png` | the other atmospheric controls over the Arctic |
+| `dJd{atemp,aqh,tauu,tauv,swdown,lwdown,precip}_<mode>_<w>_pacific.png` | the box cost's atmospheric sensitivities, western tropical Pacific |
+| `dJdtheta0_k{01,17}_<mode>_<w>_pacific.png` | dJ/dtheta0 at 5 m and 195 m (colour scale saturated at 10 %) |
+| `dJd{atemp,heff,tauu}_diff_exact_full_minus_exact_nodyn_<w>_arctic.png`, `dJdtheta0_k17_diff_..._pacific.png` | the LSR (ice-dynamics) part of the sea-ice sensitivity (7, 14 d) |
+| `dJd{atemp,heff,tauu}_diff_exact_nodyn_minus_ecco_28d_arctic.png`, `dJdtheta0_k17_diff_exact_nodyn_minus_ecco_28d_pacific.png` | what the ECCO semantics leaves out (28 d) |
+| `amplification_traces_full.png`, `fd_sweeps_full.png` | screen traces per field group; FD error against h |
+
+What the maps show: dJ/d atemp over the Arctic is negative everywhere (warmer air, less ice), largest (-2e-6 J/K per
+cell at 14 d) in the Barents and Kara Seas, where the ice is thin and growing in January; dJ/d ln HEFF0 is positive,
+largest over the thick ice north of Greenland and the Canadian Archipelago (5e-4 per cell); the LSR (dynamics) part
+(exact_full - exact_nodyn) is 3-4 % of the ice-thickness sensitivity and 4-6 % of the Arctic air-temperature one in the
+2-norm (7, 14 d; up to 20-57 % at single points near the ice edge and the coasts), 19-22 % of the meridional-stress one.
+Over the box, dJ/d atemp shows zonal stripes of both signs at the box latitudes (1e-6 per cell at 14 d), as the TFLUX
+sensitivity of Task 21.
+
+
+## M2.5 Findings
+
+1. **The adjoint of the full V4r4 model works in all three sea-ice levels over 7, 14 and 28 days** (exact_full at 7
+   and 14 d; ecco and exact_nodyn at 7, 14, 28 d). The forward is the same bytes in every mode (126 State fields incl.
+   sea ice and both cost parts, every window), J repeats bitwise, the TL (`jax.jvp`) equals the adjoint on the
+   combined direction at amplitudes 1 and 1e-6 (linear), and the reverse sweep does not amplify: theta, prognostic and
+   sea-ice-thermodynamic cotangent norms change by 0.9989-1.0007 per step (median; worst 3 chunks <= 1.0014) in every
+   mode and window, as in the flux-forced model. Only UICE/VICE grow in exact_nodyn (worst-3 1.0095/step at 28 d):
+   accumulation through the skipped LSR (identity), not amplification (sea-ice-only study).
+2. **FD plateaus.** The ocean state (theta A, B, C), the tropical wind-stress footprint and the J_theta part of the
+   global kapGM scale have plateaus against the exact adjoint in every window (1e-7 .. 5e-4; kapGM 9e-6 .. 3e-4, as in
+   Task 21); the Arctic ice-thickness footprint against exact_full at 7 and 14 d (8e-5 .. 3e-4), and at 7 d also the
+   single columns (atemp_pt in J_theta, atemp_arctic_pt in J_ice, heff_pt: 2e-4 .. 8e-4). What does not reach 1e-3: (a)
+   footprint perturbations of the air temperature (624 box columns: 2e-3 .. 9e-3 at 7 d, 7e-5 .. 4e-3 at 14 and 28 d;
+   6092 Arctic columns: 1e-4 .. 6e-2) and the J_ice part of the global kapGM scale (4e-3 .. 9e-2): the error does not
+   shrink with h over 3-4 decades, the signature of many small discontinuities (bulk-formula Stanton-number switch at
+   the sign of the air-sea temperature difference and of the Obukhov length; SEAICE_GROWTH exact-zero branches) whose
+   number grows with h, while TL = adjoint along the same directions to <= 5e-10; the single air-temperature column in
+   the box joins them at 14 and 28 d (6e-4 .. 5e-2). (b) From 14 d on, single sea-ice columns (heff_pt, atemp_arctic_pt)
+   differ from the exact_full adjoint by a CONSTANT 2.6e-3 .. 3.6e-3 at every h (28 d: 1.1e-3 .. 5.7e-3 against
+   exact_nodyn): not switch noise but a bias, which grows with the window as the ice dynamics' share grows. It is the
+   production LSR tolerance: the exact_full derivative is that of the converged LSR system, and a forward with LSR_ERROR
+   = 1e-8 (SEAICElinearIterMax 20000, same code path; 37 min per 14-day forward on a GH200 instead of 1.5 min) gives
+   FD(heff_pt, 14 d) = 1.62607e-4 / 1.62615e-4 at h = 1e-2 / 1e-3 against the adjoint 1.62565e-4 (2.5e-4 / 3.0e-4),
+   where the production forward gives 2.7e-3 / 2.8e-3. The J_ice part of a combined J also picks up switch noise from
+   perturbations far from the Arctic (round-off reaching the ice through the global cg2d flips exact-zero branches):
+   split FD by cost part.
+3. **exact_nodyn vs exact_full** (the LSR derivative): 1e-7..2e-5 for the ocean-box directions, 1.6e-3 .. 3.2e-3 for the
+   Arctic ice directions, 1.9e-2 for the global kapGM scale (its J_ice part); FD sides with exact_full (heff_arctic 7 d:
+   full 4/4 plateau at 8e-5..3e-4, nodyn 2.2e-3 off).
+4. **ecco vs exact.** In ecco mode the sea-ice cost has no adjoint path except the identity to HEFF0 (dJ/d atemp_arctic
+   = 1e-9 instead of -3e-3; dJ/d ln HEFF0 = J_ice(0) exactly, 3-10 % off). For the ocean-box cost the differences are
+   those of Task 21 (theta_B/C 6-25 %, growing with the window; atemp_box 1-5 %; tauu_box 0.5-1.7 %); the global
+   kapGM scale is 66-72 % off because it also drives J_ice.
+5. **Repeats.** ecco: J bitwise, gradients 1.8e-14 (max over all controls). Exact modes: J bitwise, 1.2e-11..9e-11
+   (theta0, relative to max |g|; the maximum sits at the largest gradient value, a deep cell west of the box).
+6. **TL vs adjoint beyond round-off in the exact modes (<= 5e-10)** comes from linearising two slightly different
+   trajectories: the jvp program's forward J differs from the chunked forward by 3.6e-14 (7 d) - 1e-13 (14 d) relative
+   (different XLA fusion), and sea-ice exact-zero branches turn that into a different Jacobian. In ecco mode (no
+   sea-ice derivative) the TL J is bitwise the chunked J and TL = adjoint to 1e-15.
+7. **Sharded (4 GH200, shard_map, ecco, 7 d).** Final State bitwise = 1 GPU (every prognostic and sea-ice field),
+   gradient within the repeat floor (1.1e-14 vs 1.3e-14), J_theta/J_ice differ by 1-2 ulp (cost sums over padded
+   tiles). 152 s per warm gradient vs 138 s on one GPU, 21 vs 44 GB device memory per GPU.
+8. **Cost (GH200).** Plain forward 0.26-0.27 s/step (7 d 43.8 s, 28 d 184 s). Warm gradient (chunked forward + reverse)
+   = 3.2 plain forwards in ecco and exact_nodyn at every window (28 d: 582 / 592 s); exact_full 26.5 (7 d: 1161 s: the
+   implicit LSR derivative, GMRES 40 x 8 per Picard pass, ~6 s/step). TL: 1.15 plain forwards (ecco, nodyn), ~24
+   (full). Device peak 44 (ecco) / 47 (nodyn) / 52 GB (full), flat from 7 to 28 d; host 1.94 GB per kept day boundary
+   (15.5 / 29 / 56 GB).
+9. **Sharded sea-ice derivative.** The implicit-LSR derivative did not trace inside shard_map(check_vma=True) (the
+   preconditioner scan's zero first iterate was typed invariant); with the first iterate typed varying
+   (`seaice_lsr._precond`, nothing changes on one device) the exact_full gradient on 4 GH200 equals 1 GPU within the
+   exact-mode repeat floor (2 d: J bitwise, theta0 1.6e-11, other controls <= 1.1e-12). CPU gates unchanged (36 tests
+   of test_seaice_dyn/model/lsr_pallas, gate flags); new test_lsr_sharded_p4_derivative fails without the fix.
+10. **Tier 2.** `test_adjoint_regression_full.py` (one day, ecco + exact_full; J, gradient norms, directional
+   derivatives recorded on a GH200, rel. 1e-9) passed on a second GH200 run (job 27659220, 11 min).
+
+## M2.6 Reproduce
+
+    # once, CPU, gate flags: the full-tree initial-state cache (bitwise the Fortran start-of-run state)
+    XLA_FLAGS="--xla_cpu_max_isa=AVX --xla_disable_hlo_passes=algsimp" JAX_PLATFORMS=cpu \
+      python scripts/adjoint/multiweek_grad.py --out <dir> --append --actions cache \
+        --rundir /work/ab0995/a270088/MIT/reference/runs/ref_full_serial13_1day \
+        --cache /work/ab0995/a270088/MIT/runs/adjoint_m2/init_ref_full_serial13_1day
+    # per window W: one 4-GH200 job, one process per GPU (use all 288 CPUs: each process binds to its Grace socket)
+    sbatch --gpus=4 --cpus-per-task=288 --mem=800G scripts/adjoint/fullgrad_dolpung.sbatch --multi \
+      "--out $R/ecco --days W --mode ecco --actions fwdcheck,grad,screen --repeats 3 +++ --out $R/ecco --append --days W --mode ecco --actions tl" \
+      "--out $R/nodyn --days W --mode exact_nodyn --actions grad,screen --repeats 2 +++ ... --actions tl" \
+      "--out $R/full --days W --mode exact_full --actions grad +++ ... --actions tl --tl-dirs combined" \
+      "--out $R/fd --days W --mode exact_full --actions fd"
+    # per-part FD: J_theta adjoint with --ice-weight 0; single columns: --dirs atemp_pt,atemp_arctic_pt,heff_pt
+    # converged-LSR FD: --actions fdeval --dirs heff_pt --hs H --fd-sign +1|-1 --lsr-error 1e-8 --lsr-maxiter 20000
+    # sharded: sbatch --gpus=4 ... fullgrad_dolpung.sbatch --out $R/p4 --days 7 --mode ecco --actions fwdcheck,grad --nproc 4
+    python3 scripts/adjoint/fullgrad_summary.py <run dirs> [--ref-mode exact_nodyn] [--shard P4DIR:1GPUDIR]
+    /work/ab0995/a270088/mambaforge/envs/nereus/bin/python scripts/adjoint/plot_fullgrad.py --grads mode=path,... \
+      --tag 7d --diff exact_full-exact_nodyn --runs ... --figdir ...
+    # tier 2: mitgcm_jax/tests/test_adjoint_regression_full.py (one day, ecco + exact_full, GH200 record)
+
+Wall clock (GH200, compilation included): 7 d all modes + FD + TL in one 4-GPU job 1 h 42 min (the exact_full
+gradients, screen and TL dominate); 28 d ecco + exact_nodyn + FD (8 directions) 1 h 52 min.
+
+## M2.7 Open questions (for Nikolay)
+
+1. **FD bar for sea-ice directions beyond 7 days.** Single sea-ice columns keep a constant ~3e-3 FD-vs-adjoint offset
+   at 14 d against the production forward; against a converged LSR (1e-8) it drops to 2.5e-4 / 3.0e-4 (heff_pt).
+   Accept the sea-ice FD bar on the converged-forward check (the rule of docs/ADJOINT_MODES.md), with the other
+   single columns (atemp_arctic_pt at 14 d, both at 28 d against exact_full) still to be run that way (37 min per
+   14-day forward, ~75 min at 28 d)?
+2. **Air-temperature footprints are switch-limited** (bulk-formula stability switch; sea-ice exact-zero branches):
+   2e-3 .. 6e-2 at every h, TL = adjoint. Accept them as recorded (as TFLUX in Task 21) with single-column directions
+   carrying the FD check, or is a smoothed switch wanted for gradient work (a deviation)?
+3. **Controls tauu/tauv enter before EXF_WIND** (buffer adjustments, as asked), while V4r4's xx_tauu/xx_tauv enter after
+   it (EXF_GETSURFACEFLUXES), so ours also change the wind direction the sea-ice drag sees. For M4 (gentim2d controls)
+   the literal place is EXF_GETSURFACEFLUXES: agreed?
+4. **ECCO semantics and sea-ice costs.** With seaice="ecco" a cost on the sea-ice state has no adjoint path to the
+   atmosphere or the ocean (only the identity to its own initial state): that is what TAF computes for V4r4. How V4r4
+   still uses ice data (its sea-ice cost terms / SEAICE_COST_SENSI proxies acting on the ocean) is to be read in M4.1.
+   If the M4 cost has a direct sea-ice term, keep ecco (as ECCO) or use exact_nodyn (3.2 forwards per gradient, like
+   ecco; exact_full costs 26)?
+5. **Exact-mode repeat spread** grows to 9e-11 (theta0, 14 d) vs 1e-14 in ecco mode: above Task 18's 4e-11 floor at
+   one point (the largest gradient value). Worth an investigation (scatter-add order in exchange transposes under the
+   sea-ice adjoint), or record as the floor for exact modes?
+6. **Fake-CPU-device sharded gradient** (NaN / deadlock with XLA:CPU in-process collectives; GPU fine): drop CPU as a
+   stand-in for sharded gradients of the full tree, or investigate further (XLA:CPU concurrent collectives)?
