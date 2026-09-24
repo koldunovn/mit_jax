@@ -505,7 +505,7 @@ Production runs may use XLA defaults (ulp-level differences only).
 - NASA CMR sometimes times out or returns partial granule lists (2026-09-24: `list` found 3 of 4 small archives, then
   nothing); "no granules" from `fetch_eccov4r4.py list` is not proof that a file was withdrawn.
 
-## M2 adjoint acceptance: full-V4r4 multi-week gradient (plan Task 22, 2026-09-24, sub-agent)
+## M2 adjoint acceptance: full-V4r4 multi-week gradient (plan Task 22, 2026-09-24)
 - **Reuse the M1 driver as a module.** `scripts/adjoint/fullgrad.py` imports `multiweek_grad` (model loading, FModel
   buffer adjustments, carried constants, screen statistics) and adds only the full-tree cost, controls and modes: the
   flux-forced driver and its tier-2 test stay byte-identical.
